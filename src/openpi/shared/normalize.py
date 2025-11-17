@@ -32,9 +32,10 @@ class RunningStats:
         Update the running statistics with a batch of vectors.
 
         Args:
-            vectors (np.ndarray): An array where all dimensions except the last are batch dimensions.
+            vectors (np.ndarray): A 2D array where each row is a new vector.
         """
-        batch = batch.reshape(-1, batch.shape[-1])
+        if batch.ndim == 1:
+            batch = batch.reshape(-1, 1)
         num_elements, vector_length = batch.shape
         if self._count == 0:
             self._mean = np.mean(batch, axis=0)

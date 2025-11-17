@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 from typing import Any
+import numpy as np
 
 import einops
 import flax.nnx as nnx
@@ -311,3 +312,170 @@ class Pi0FAST(_model.BaseModel):
             cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
         )
         return output_tokens
+
+
+    # -----------------------------
+    # Grad-CAM helpers (inside Pi0FAST)
+    # -----------------------------
+    def _ordered_image_keys(self, obs: _model.Observation):
+        """Stable camera order; auto-adapts to LIBERO keys if present."""
+        # Map common aliases -> canonical names used by LIBERO inputs
+        libero_aliases = {
+            "agentview_rgb": "base_0_rgb",
+            "robot0_eye_in_hand_rgb": "left_wrist_0_rgb",
+            "wrist_0_rgb": "left_wrist_0_rgb",      # accept our old alias too
+            "base_1_rgb": "base_1_rgb",
+        }
+
+        imgs = {}
+        for k, v in obs.images.items():
+            normk = libero_aliases.get(k, k)
+            imgs[normk] = v
+
+        # Preferred order; include both wrist names but only ones actually present
+        pref = ["base_0_rgb", "base_1_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"]
+        return [k for k in pref if k in imgs], imgs
+
+
+    def _get_image_tokens_and_spans(self, observation: _model.Observation):
+        """
+        Returns:
+        tokens_concat: [B, L_tot, D] concatenated visual tokens from SigLIP
+        spans: list of (name, start, end, side) for each camera block
+        imgs_norm: normalized image dict used for encoding
+        """
+        key_order, imgs_norm = self._ordered_image_keys(observation)
+        tokens_list, spans = [], []
+        start = 0
+        for name in key_order:
+            cam_tokens, _ = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
+            L = cam_tokens.shape[1]
+            side = int(jnp.sqrt(L))
+            assert side * side == L, f"Non-square token grid for {name}: L={L}"
+            tokens_list.append(cam_tokens)
+            spans.append((name, start, start + L, side))
+            start += L
+        tokens_concat = jnp.concatenate(tokens_list, axis=1) if tokens_list else None
+        return tokens_concat, spans, imgs_norm
+
+
+    def gradcam_for_token(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        t_index: int,
+        token_id: int,
+        generated_prefix_ids: at.Int | None = None,  # optional teacher-forced generated tokens [B, K]
+        stop_at_siglip: bool = True,
+    ):
+        """
+        Grad-CAM over SigLIP patch tokens for ONE output token.
+
+        Args:
+        t_index: index within the predicted slice (0 = first predicted token)
+        token_id: vocab id to explain at that position
+        generated_prefix_ids: optional [B, K] tokens generated AFTER the prompt; if provided,
+                                the explanation is conditioned on these K previous generated tokens.
+        stop_at_siglip: if True, take grad w.r.t. SigLIP outputs only (faster).
+
+        Returns:
+        dict[camera_name] -> (H, W) float32 heatmap in [0,1]
+        """
+        # Preprocess like normal forward
+        observation = _model.preprocess_observation(
+            rng, observation, train=False, image_keys=list(observation.images.keys())
+        )
+
+        # Visual tokens (A) and spans
+        img_tokens_concat, spans, _ = self._get_image_tokens_and_spans(observation)  # [B, L_tot, D]
+        if img_tokens_concat is None:
+            return {}
+        if stop_at_siglip:
+            img_tokens_concat = jax.lax.stop_gradient(img_tokens_concat)
+
+        # Text embeddings
+        assert observation.tokenized_prompt is not None
+        assert observation.tokenized_prompt_mask is not None
+        assert observation.token_ar_mask is not None
+        txt_ids  = observation.tokenized_prompt
+        txt_mask = observation.tokenized_prompt_mask
+        txt_ar   = observation.token_ar_mask
+        txt_emb  = self.PaliGemma.llm(txt_ids, embed_only=True)  # [B, S_txt, D]
+
+        # Optional generated prefix (teacher-forced)
+        gen_len = 0
+        if generated_prefix_ids is not None:
+            gen_emb  = self.PaliGemma.llm(generated_prefix_ids, embed_only=True)  # [B, K, D]
+            gen_len  = generated_prefix_ids.shape[1]
+            gen_mask = jnp.ones((gen_emb.shape[0], gen_len), dtype=bool)
+            gen_ar   = jnp.ones((gen_emb.shape[0], gen_len), dtype=jnp.int32)     # pure causal
+        else:
+            gen_emb = None
+            gen_mask = None
+            gen_ar = None
+
+        # Build masks for [IMG || PROMPT || (GEN?)]
+        input_mask_blocks, ar_blocks = [], []
+        for name, s, e, _ in spans:
+            present = observation.image_masks.get(name, jnp.ones((img_tokens_concat.shape[0],), bool))
+            input_mask_blocks.append(jnp.repeat(present[:, None], e - s, axis=1))
+            ar_blocks.append(jnp.zeros_like(input_mask_blocks[-1], dtype=jnp.int32))
+        input_mask_blocks.append(txt_mask)
+        ar_blocks.append(txt_ar)
+        if gen_emb is not None:
+            input_mask_blocks.append(gen_mask)
+            ar_blocks.append(gen_ar)
+
+        input_mask = jnp.concatenate(input_mask_blocks, axis=1)  # [B, S_all]
+        ar_mask    = jnp.concatenate(ar_blocks,        axis=1)   # [B, S_all]
+        attn_mask  = make_attn_mask(input_mask, ar_mask)         # [B, S_all, S_all]
+
+        # Define score as the logit at target position using one non-decoding forward
+        def score_fn(img_tokens_in):
+            parts = [img_tokens_in, txt_emb]
+            if gen_emb is not None:
+                parts.append(gen_emb)
+            prefix = jnp.concatenate(parts, axis=1)                           # [B, S_all, D]
+            pre_logits, _, _ = self.PaliGemma.llm(
+                embedded_prefix=prefix[:, :-1],
+                mask=attn_mask[:, :-1, :-1],
+                return_prelogits=True,
+            )
+            target_len = (txt_ids.shape[1] - 1) + gen_len                     # predict next for prompt & gen prefix
+            logits, _ = self.PaliGemma.llm(pre_logits=pre_logits[:, -target_len:])
+            return logits[0, t_index, token_id]                               # scalar
+
+        # Grad w.r.t. visual tokens
+        dscore_dA = jax.grad(score_fn)(img_tokens_concat)   # [B, L_tot, D]
+        A         = img_tokens_concat                       # [B, L_tot, D]
+
+        # Per-camera CAMs
+        cams = {}
+        for name, s, e, side in spans:
+            A_cam  = A[0, s:e, :]           # [L_cam, D]
+            dA_cam = dscore_dA[0, s:e, :]   # [L_cam, D]
+            w      = jnp.mean(dA_cam, axis=0)                           # α_j
+            cam_f  = jnp.maximum(0.0, jnp.einsum("ld,d->l", A_cam, w))  # ReLU(weighted sum)
+            cam    = cam_f.reshape(side, side)
+            cam    = (cam - cam.min()) / (cam.max() + 1e-8)
+            cams[name] = np.array(cam, dtype=np.float32)
+        return cams
+
+
+    def gradcam_for_action_token(self, rng, observation, generated_ids, step_from_start: int = 0):
+        """
+        Explain the token the model actually generated at step `step_from_start` after the prompt.
+        Args:
+        generated_ids: [B, T] tokens produced by your decode loop
+        step_from_start: 0 = first generated token, 1 = second, etc.
+        """
+        tok = int(generated_ids[0, step_from_start])
+        return self.gradcam_for_token(
+            rng,
+            observation,
+            t_index=step_from_start,
+            token_id=tok,
+            generated_prefix_ids=generated_ids[:, :step_from_start],  # teacher-force prev gens
+            stop_at_siglip=True,
+        )
