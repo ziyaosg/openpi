@@ -165,40 +165,20 @@ class Pi0FAST(_model.BaseModel):
         ar_mask = []
         token_embeddings = []
         logger.info(f"[images present] {list(obs.images.keys())}")
-        # # embed images
-        # for name in obs.images:
-        #     image_token_embeddings, _ = self.PaliGemma.img(obs.images[name], train=False)
 
-        #     token_embeddings.append(image_token_embeddings)
-        #     input_mask.append(
-        #         einops.repeat(
-        #             obs.image_masks[name],
-        #             "b -> b s",
-        #             s=image_token_embeddings.shape[1],
-        #         )
-        #     )
-        #     # image tokens attend to each other --> AR mask = 0
-        #     ar_mask.append(0 * input_mask[-1])
 
         # embed images
         for name in obs.images:
-            image_token_embeddings, aux = self.PaliGemma.img(obs.images[name], train=False)
+            # We only need the post-projection tokens for the model & Grad-CAM.
+            image_token_embeddings, _ = self.PaliGemma.img(obs.images[name], train=False)
 
-            # ==== DEBUG STATS ====
+            # (Optional) debug: check post-projection scale per camera
             try:
-                # pre-projection (ViT features before Dense head)
-                if aux is not None and "pre_logits" in aux:
-                    pp = aux["pre_logits"]
-                    pm = jnp.mean(pp).item()
-                    ps = jnp.std(pp).item()
-                    logger.info(f"[pre-proj] {name}: mean={pm:.4f} std={ps:.4f}")
-
-                # post-projection (after Dense to VLM width; what the LLM actually sees)
                 m = jnp.mean(image_token_embeddings).item()
                 s = jnp.std(image_token_embeddings).item()
                 logger.info(f"[post-proj] {name}: mean={m:.4f} std={s:.4f}")
             except Exception as e:
-                logger.warning(f"norm-stats error for {name}: {e}")
+                logger.warning(f"post-proj norm-stats error for {name}: {e}")
 
             token_embeddings.append(image_token_embeddings)
             input_mask.append(
@@ -381,18 +361,15 @@ class Pi0FAST(_model.BaseModel):
         tokens_list, spans = [], []
         start = 0
         for name in key_order:
-            # cam_tokens, _ = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
-            cam_tokens, aux = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
-            # ==== DEBUG STATS ====
+            cam_tokens, _ = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
+
+            # Optional: light debug on post-proj scale per camera
             try:
-                if aux is not None and "pre_logits" in aux:
-                    pp = aux["pre_logits"]
-                    pm = jnp.mean(pp).item(); ps = jnp.std(pp).item()
-                    logger.info(f"[pre-proj] {name}: mean={pm:.4f} std={ps:.4f}")
-                m = jnp.mean(cam_tokens).item(); s = jnp.std(cam_tokens).item()
-                logger.info(f"[post-proj] {name}: mean={m:.4f} std={s:.4f}")
+                m = jnp.mean(cam_tokens).item()
+                s = jnp.std(cam_tokens).item()
+                logger.info(f"[spans/post-proj] {name}: mean={m:.4f} std={s:.4f}")
             except Exception as e:
-                logger.warning(f"norm-stats error (spans) for {name}: {e}")
+                logger.warning(f"spans post-proj norm-stats error for {name}: {e}")
 
 
             L = cam_tokens.shape[1]
