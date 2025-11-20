@@ -55,14 +55,51 @@ def _resize(img: np.ndarray, size_hw: Tuple[int, int]) -> np.ndarray:
     return out
 
 
-def _normalize_cam(cam: np.ndarray) -> np.ndarray:
+def _cam_to_2d(cam: np.ndarray) -> np.ndarray:
+    """Convert stored CAM to 2D float32 (no normalization)."""
     cam = np.asarray(cam, dtype=np.float32)
+    # [H,W,1] → [H,W]
     if cam.ndim == 3 and cam.shape[-1] == 1:
         cam = cam[..., 0]
+    # [H,W,3] → average over channels (just in case)
     if cam.ndim == 3 and cam.shape[-1] == 3:
         cam = cam.mean(axis=-1)
-    cam = cam - cam.min()
-    cam = cam / (cam.max() + 1e-6)
+    if cam.ndim != 2:
+        cam = np.squeeze(cam)
+        if cam.ndim != 2:
+            raise ValueError(f"CAM is not 2D even after squeeze: shape={cam.shape}")
+    return cam
+
+
+def _normalize_cam(
+    cam: np.ndarray,
+    *,
+    mode: str = "per_image",
+    global_min: Optional[float] = None,
+    global_max: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Normalize CAM to [0,1].
+
+    mode="per_image": use per-image min/max (like original behavior).
+    mode="global":    use global_min/global_max computed across all steps+cameras.
+    """
+    cam = _cam_to_2d(cam)
+
+    if mode == "global":
+        if global_min is None or global_max is None:
+            raise ValueError("global_min/global_max must be provided for mode='global'")
+        mn, mx = float(global_min), float(global_max)
+    else:  # per_image
+        mn, mx = float(cam.min()), float(cam.max())
+
+    denom = mx - mn
+    if denom < 1e-8:
+        # All zeros or very flat → just return zeros
+        return np.zeros_like(cam, dtype=np.float32)
+
+    cam = (cam - mn) / denom
+    cam = np.clip(cam, 0.0, 1.0).astype(np.float32)
     return cam
 
 
@@ -109,6 +146,9 @@ def overlay_one(
     only_cams: Optional[List[str]],
     out_size: Optional[Tuple[int, int]],
     scale: float,
+    norm_mode: str,
+    global_min: Optional[float],
+    global_max: Optional[float],
 ) -> None:
     data = np.load(npz_path, allow_pickle=True)
     keys = list(data.keys())
@@ -188,10 +228,23 @@ def overlay_one(
         base_f = base.astype(np.float32) / 255.0
         H, W = base_f.shape[:2]
 
-        cam = _normalize_cam(np.asarray(data[ck]))
+        # ---- NEW: normalization mode aware ----
+        raw_cam = np.asarray(data[ck])
+        cam = _normalize_cam(
+            raw_cam,
+            mode=norm_mode,
+            global_min=global_min,
+            global_max=global_max,
+        )
+
         if cam.shape[:2] != (H, W):
             cam = _resize(cam, (H, W))
-            cam = _normalize_cam(cam)
+            cam = _normalize_cam(
+                cam,
+                mode=norm_mode,
+                global_min=global_min,
+                global_max=global_max,
+            )
         heat = cmap(cam)[..., :3]
 
         overlay = np.clip((1.0 - alpha) * base_f + alpha * heat, 0, 1.0)
@@ -238,6 +291,18 @@ def main():
     p.add_argument("--scale", type=float, default=1.0,
                    help="Scale factor for saved overlays (ignored if --out-size is set)")
 
+    # ---- NEW: normalization mode ----
+    p.add_argument(
+        "--norm-mode",
+        type=str,
+        default="per_image",
+        choices=["per_image", "global"],
+        help=(
+            "per_image: normalize each CAM by its own min/max (original behavior). "
+            "global: normalize by global min/max across all steps & cameras in this run."
+        ),
+    )
+
     args = p.parse_args()
 
     steps = load_manifest_steps(args.run_dir)
@@ -249,7 +314,6 @@ def main():
     only_cams = [s.strip() for s in args.only_cams.split(",")] if args.only_cams else None
     camera_order = [s.strip() for s in args.camera_order.split(",") if s.strip()]
 
-    # If out_dir not set, we won’t pop up windows (headless export is typical)
     if args.out_dir is None:
         print("[INFO] No --out-dir provided; using non-interactive export is recommended. Set --out-dir to save PNGs.")
         return
@@ -257,7 +321,52 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"Backend: {matplotlib.get_backend()}")
     print(f"Exporting {len(steps)} step(s) → {args.out_dir}")
+    print(f"Normalization mode: {args.norm_mode}")
 
+    # ---- NEW: compute global min/max over all steps+cameras (per run/task) ----
+    global_min = None
+    global_max = None
+    if args.norm_mode == "global":
+        gmin = np.inf
+        gmax = -np.inf
+        count = 0
+
+        for npz_path in steps:
+            try:
+                data = np.load(npz_path, allow_pickle=True)
+            except Exception as e:
+                print(f"[WARN] Failed to load {os.path.basename(npz_path)} for global stats: {e}")
+                continue
+
+            keys = list(data.keys())
+            cam_keys = [k for k in keys if k.startswith("cam/")]
+
+            if only_cams:
+                cam_keys = [ck for ck in cam_keys if ck.split("/", 1)[-1] in only_cams]
+
+            for ck in cam_keys:
+                cam_raw = _cam_to_2d(np.asarray(data[ck]))
+                if cam_raw.size == 0:
+                    continue
+                local_min = float(cam_raw.min())
+                local_max = float(cam_raw.max())
+                if local_min < gmin:
+                    gmin = local_min
+                if local_max > gmax:
+                    gmax = local_max
+                count += 1
+
+        if count == 0 or not np.isfinite(gmin) or not np.isfinite(gmax):
+            print("[WARN] Could not compute global CAM stats; falling back to per-image normalization.")
+            global_min = None
+            global_max = None
+            args.norm_mode = "per_image"
+        else:
+            global_min = gmin
+            global_max = gmax
+            print(f"[INFO] Global CAM range across this run: min={global_min:.6f}, max={global_max:.6f}")
+
+    # ---- render overlays ----
     for npz_path in steps:
         try:
             overlay_one(
@@ -272,6 +381,9 @@ def main():
                 only_cams=only_cams,
                 out_size=tuple(args.out_size) if args.out_size else None,
                 scale=args.scale,
+                norm_mode=args.norm_mode,
+                global_min=global_min,
+                global_max=global_max,
             )
         except Exception as e:
             print(f"[WARN] Failed on {os.path.basename(npz_path)}: {e}")

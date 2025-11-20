@@ -164,9 +164,41 @@ class Pi0FAST(_model.BaseModel):
         input_mask = []
         ar_mask = []
         token_embeddings = []
+        logger.info(f"[images present] {list(obs.images.keys())}")
+        # # embed images
+        # for name in obs.images:
+        #     image_token_embeddings, _ = self.PaliGemma.img(obs.images[name], train=False)
+
+        #     token_embeddings.append(image_token_embeddings)
+        #     input_mask.append(
+        #         einops.repeat(
+        #             obs.image_masks[name],
+        #             "b -> b s",
+        #             s=image_token_embeddings.shape[1],
+        #         )
+        #     )
+        #     # image tokens attend to each other --> AR mask = 0
+        #     ar_mask.append(0 * input_mask[-1])
+
         # embed images
         for name in obs.images:
-            image_token_embeddings, _ = self.PaliGemma.img(obs.images[name], train=False)
+            image_token_embeddings, aux = self.PaliGemma.img(obs.images[name], train=False)
+
+            # ==== DEBUG STATS ====
+            try:
+                # pre-projection (ViT features before Dense head)
+                if aux is not None and "pre_logits" in aux:
+                    pp = aux["pre_logits"]
+                    pm = jnp.mean(pp).item()
+                    ps = jnp.std(pp).item()
+                    logger.info(f"[pre-proj] {name}: mean={pm:.4f} std={ps:.4f}")
+
+                # post-projection (after Dense to VLM width; what the LLM actually sees)
+                m = jnp.mean(image_token_embeddings).item()
+                s = jnp.std(image_token_embeddings).item()
+                logger.info(f"[post-proj] {name}: mean={m:.4f} std={s:.4f}")
+            except Exception as e:
+                logger.warning(f"norm-stats error for {name}: {e}")
 
             token_embeddings.append(image_token_embeddings)
             input_mask.append(
@@ -178,6 +210,7 @@ class Pi0FAST(_model.BaseModel):
             )
             # image tokens attend to each other --> AR mask = 0
             ar_mask.append(0 * input_mask[-1])
+
 
         # add tokenized inputs
         assert obs.tokenized_prompt is not None, "Tokenized prompt is required"
@@ -348,7 +381,20 @@ class Pi0FAST(_model.BaseModel):
         tokens_list, spans = [], []
         start = 0
         for name in key_order:
-            cam_tokens, _ = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
+            # cam_tokens, _ = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
+            cam_tokens, aux = self.PaliGemma.img(imgs_norm[name], train=False)  # [B, L, D] (pool_type="none")
+            # ==== DEBUG STATS ====
+            try:
+                if aux is not None and "pre_logits" in aux:
+                    pp = aux["pre_logits"]
+                    pm = jnp.mean(pp).item(); ps = jnp.std(pp).item()
+                    logger.info(f"[pre-proj] {name}: mean={pm:.4f} std={ps:.4f}")
+                m = jnp.mean(cam_tokens).item(); s = jnp.std(cam_tokens).item()
+                logger.info(f"[post-proj] {name}: mean={m:.4f} std={s:.4f}")
+            except Exception as e:
+                logger.warning(f"norm-stats error (spans) for {name}: {e}")
+
+
             L = cam_tokens.shape[1]
             side = int(jnp.sqrt(L))
             assert side * side == L, f"Non-square token grid for {name}: L={L}"
@@ -446,21 +492,51 @@ class Pi0FAST(_model.BaseModel):
             logits, _ = self.PaliGemma.llm(pre_logits=pre_logits[:, -target_len:])
             return logits[0, t_index, token_id]                               # scalar
 
+        # # Grad w.r.t. visual tokens
+        # dscore_dA = jax.grad(score_fn)(img_tokens_concat)   # [B, L_tot, D]
+        # A         = img_tokens_concat                       # [B, L_tot, D]
+
+        # # Per-camera CAMs
+        # cams = {}
+        # for name, s, e, side in spans:
+        #     A_cam  = A[0, s:e, :]           # [L_cam, D]
+        #     dA_cam = dscore_dA[0, s:e, :]   # [L_cam, D]
+        #     w      = jnp.mean(dA_cam, axis=0)                           # α_j
+        #     cam_f  = jnp.maximum(0.0, jnp.einsum("ld,d->l", A_cam, w))  # ReLU(weighted sum)
+        #     cam    = cam_f.reshape(side, side)
+        #     cam    = (cam - cam.min()) / (cam.max() + 1e-8)
+        #     cams[name] = np.array(cam, dtype=np.float32)
+        # return cams
+
+
         # Grad w.r.t. visual tokens
         dscore_dA = jax.grad(score_fn)(img_tokens_concat)   # [B, L_tot, D]
         A         = img_tokens_concat                       # [B, L_tot, D]
 
-        # Per-camera CAMs
-        cams = {}
+        # --------- Per-camera raw CAMs (no normalization) ---------
+        # Only keep the cameras we care about for visualization
+        include_cams = {"base_0_rgb", "left_wrist_0_rgb"}
+
+        cams = {}   # name -> raw (H, W) CAM, non-normalized, ReLU'd
+
         for name, s, e, side in spans:
+            if name not in include_cams:
+                continue
+
             A_cam  = A[0, s:e, :]           # [L_cam, D]
             dA_cam = dscore_dA[0, s:e, :]   # [L_cam, D]
+
+            # Standard Grad-CAM weighting
             w      = jnp.mean(dA_cam, axis=0)                           # α_j
-            cam_f  = jnp.maximum(0.0, jnp.einsum("ld,d->l", A_cam, w))  # ReLU(weighted sum)
+            cam_f  = jnp.maximum(0.0, jnp.einsum("ld,d->l", A_cam, w))  # [L_cam], ReLU
+
+            # Reshape to spatial map; DO NOT normalize here
             cam    = cam_f.reshape(side, side)
-            cam    = (cam - cam.min()) / (cam.max() + 1e-8)
-            cams[name] = np.array(cam, dtype=np.float32)
+
+            cams[name] = np.asarray(cam, dtype=np.float32)
+
         return cams
+
 
 
     def gradcam_for_action_token(self, rng, observation, generated_ids, step_from_start: int = 0):
