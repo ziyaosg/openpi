@@ -81,8 +81,8 @@ def _normalize_cam(
     """
     Normalize CAM to [0,1].
 
-    mode="per_image": use per-image min/max (like original behavior).
-    mode="global":    use global_min/global_max computed across all steps+cameras.
+    mode="per_image": per-image min/max.
+    mode="global":    use provided global_min/global_max.
     """
     cam = _cam_to_2d(cam)
 
@@ -95,7 +95,6 @@ def _normalize_cam(
 
     denom = mx - mn
     if denom < 1e-8:
-        # All zeros or very flat → just return zeros
         return np.zeros_like(cam, dtype=np.float32)
 
     cam = (cam - mn) / denom
@@ -133,9 +132,37 @@ def load_manifest_steps(run_dir: str) -> List[str]:
     return paths
 
 
+# ---------- EPISODE HELPERS ----------
+
+def load_episodes(path: str) -> List[Dict]:
+    """Load episodes from JSON. Accepts [ {...}, ... ] or { 'EPISODES': [...] }."""
+    with open(path, "r") as f:
+        obj = json.load(f)
+    if isinstance(obj, dict) and "EPISODES" in obj:
+        episodes = obj["EPISODES"]
+    elif isinstance(obj, list):
+        episodes = obj
+    else:
+        raise ValueError(f"Unrecognized episodes JSON format in {path}")
+    # basic sanity
+    for ep in episodes:
+        if "start_idx" not in ep or "end_idx" not in ep:
+            raise ValueError("Each episode must have start_idx and end_idx")
+    return episodes
+
+
+def episode_for_index(idx: int, episodes: List[Dict]) -> Optional[int]:
+    """Return index into episodes list whose [start_idx, end_idx] contains idx."""
+    for i, ep in enumerate(episodes):
+        if ep["start_idx"] <= idx <= ep["end_idx"]:
+            return i
+    return None
+
+
 def overlay_one(
     npz_path: str,
     *,
+    step_idx: int,
     alpha: float,
     cmap_name: str,
     max_cams: int,
@@ -146,7 +173,7 @@ def overlay_one(
     only_cams: Optional[List[str]],
     out_size: Optional[Tuple[int, int]],
     scale: float,
-    norm_mode: str,
+    norm_mode: str,      # "per_image" or "global" for this particular call
     global_min: Optional[float],
     global_max: Optional[float],
 ) -> None:
@@ -182,9 +209,11 @@ def overlay_one(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # show/save raw base optionally when no CAMs or for debugging (we skip window display here)
     if not cam_keys and base_img is not None and out_dir:
-        png = os.path.join(out_dir, os.path.basename(npz_path).replace(".npz", f"__{base_key.replace('/','_')}.png"))
+        png = os.path.join(
+            out_dir,
+            os.path.basename(npz_path).replace(".npz", f"__{base_key.replace('/','_')}.png")
+        )
         matplotlib.image.imsave(png, base_img)
         print("Saved", png)
         return
@@ -192,7 +221,6 @@ def overlay_one(
     cmap = plt.get_cmap(cmap_name)
     shown = 0
 
-    # helper: resize overlay to out_size or scale
     def _maybe_resize_overlay(img_float01: np.ndarray) -> np.ndarray:
         if out_size is not None:
             W, H = out_size
@@ -210,25 +238,22 @@ def overlay_one(
         if shown >= max_cams:
             break
 
-        cam_name = ck.split("/", 1)[-1]  # e.g., base_0_rgb
-        # choose frame key for this cam
+        cam_name = ck.split("/", 1)[-1]
         this_frame_key = None
         if match_per_cam:
             candidate = f"frame/{cam_name}"
             if candidate in frame_keys:
                 this_frame_key = candidate
         if this_frame_key is None:
-            this_frame_key = base_key  # fallback to global base
+            this_frame_key = base_key
 
         if this_frame_key is None:
-            # no frame at all → skip overlay, but could still save heatmap alone if desired
             continue
 
         base = _ensure_rgb(np.squeeze(np.asarray(data[this_frame_key])))
         base_f = base.astype(np.float32) / 255.0
         H, W = base_f.shape[:2]
 
-        # ---- NEW: normalization mode aware ----
         raw_cam = np.asarray(data[ck])
         cam = _normalize_cam(
             raw_cam,
@@ -246,11 +271,9 @@ def overlay_one(
                 global_max=global_max,
             )
         heat = cmap(cam)[..., :3]
-
         overlay = np.clip((1.0 - alpha) * base_f + alpha * heat, 0, 1.0)
         overlay = _maybe_resize_overlay(overlay)
 
-        # decide output path
         if out_dir:
             if split_by_camera:
                 sub = os.path.join(out_dir, cam_name)
@@ -270,12 +293,12 @@ def main():
     p.add_argument("--run-dir", required=True, help="Run directory with manifest.json and raw/")
     p.add_argument("--alpha", type=float, default=0.45, help="CAM overlay alpha (0..1)")
     p.add_argument("--cmap", type=str, default="jet", help="Matplotlib colormap")
-    p.add_argument("--max-steps", type=int, default=512, help="Max steps to process")
+    p.add_argument("--max-steps", type=int, default=1000, help="Max steps to process")
     p.add_argument("--max-cams", type=int, default=4, help="Max CAMs per step")
     p.add_argument("--out-dir", type=str, default=None, help="If set, save PNGs here (no GUI windows)")
     p.add_argument("--start", type=int, default=0, help="Start index into sorted steps")
 
-    # New controls
+    # view options
     p.add_argument("--split-by-camera", action="store_true",
                    help="Save into subfolders per camera name (e.g., base_0_rgb/, left_wrist_0_rgb/)")
     p.add_argument("--match-per-cam", action="store_true",
@@ -285,22 +308,32 @@ def main():
     p.add_argument("--only-cams", type=str, default=None,
                    help="Comma list to restrict CAM names (e.g. base_0_rgb,left_wrist_0_rgb)")
 
-    # Resizing options
-    p.add_argument("--out-size", type=int, nargs=2, metavar=("W","H"),
+    # resizing
+    p.add_argument("--out-size", type=int, nargs=2, metavar=("W", "H"),
                    default=None, help="Resize saved overlays to W H")
     p.add_argument("--scale", type=float, default=1.0,
                    help="Scale factor for saved overlays (ignored if --out-size is set)")
 
-    # ---- NEW: normalization mode ----
+    # normalization MODES at CLI level
     p.add_argument(
         "--norm-mode",
         type=str,
         default="per_image",
-        choices=["per_image", "global"],
+        choices=["per_image", "global_task", "global_run"],
         help=(
-            "per_image: normalize each CAM by its own min/max (original behavior). "
-            "global: normalize by global min/max across all steps & cameras in this run."
+            "per_image: normalize each CAM by its own min/max.\n"
+            "global_task: with --episodes-json, compute min/max per task/episode and "
+            "normalize using that range.\n"
+            "global_run: compute a single global min/max over all steps+cams in this run."
         ),
+    )
+
+    # episodes json (needed for global_task)
+    p.add_argument(
+        "--episodes-json",
+        type=str,
+        default=None,
+        help="Path to episodes.json with start_idx/end_idx (used by global_task).",
     )
 
     args = p.parse_args()
@@ -315,7 +348,7 @@ def main():
     camera_order = [s.strip() for s in args.camera_order.split(",") if s.strip()]
 
     if args.out_dir is None:
-        print("[INFO] No --out-dir provided; using non-interactive export is recommended. Set --out-dir to save PNGs.")
+        print("[INFO] No --out-dir provided; set --out-dir to save PNGs.")
         return
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -323,27 +356,27 @@ def main():
     print(f"Exporting {len(steps)} step(s) → {args.out_dir}")
     print(f"Normalization mode: {args.norm_mode}")
 
-    # ---- NEW: compute global min/max over all steps+cameras (per run/task) ----
-    global_min = None
-    global_max = None
-    if args.norm_mode == "global":
+    episodes: Optional[List[Dict]] = None
+    ep_stats_min: Dict[int, float] = {}
+    ep_stats_max: Dict[int, float] = {}
+    global_min_run: Optional[float] = None
+    global_max_run: Optional[float] = None
+
+    # ---- compute stats depending on norm-mode ----
+    # 1) global_run: one min/max over all steps
+    if args.norm_mode == "global_run":
         gmin = np.inf
         gmax = -np.inf
-        count = 0
-
         for npz_path in steps:
             try:
                 data = np.load(npz_path, allow_pickle=True)
             except Exception as e:
-                print(f"[WARN] Failed to load {os.path.basename(npz_path)} for global stats: {e}")
+                print(f"[WARN] Failed to load {os.path.basename(npz_path)} for global_run stats: {e}")
                 continue
-
             keys = list(data.keys())
             cam_keys = [k for k in keys if k.startswith("cam/")]
-
             if only_cams:
                 cam_keys = [ck for ck in cam_keys if ck.split("/", 1)[-1] in only_cams]
-
             for ck in cam_keys:
                 cam_raw = _cam_to_2d(np.asarray(data[ck]))
                 if cam_raw.size == 0:
@@ -354,23 +387,105 @@ def main():
                     gmin = local_min
                 if local_max > gmax:
                     gmax = local_max
-                count += 1
-
-        if count == 0 or not np.isfinite(gmin) or not np.isfinite(gmax):
-            print("[WARN] Could not compute global CAM stats; falling back to per-image normalization.")
-            global_min = None
-            global_max = None
+        if not np.isfinite(gmin) or not np.isfinite(gmax):
+            print("[WARN] Could not compute global_run CAM stats; falling back to per-image normalization.")
             args.norm_mode = "per_image"
         else:
-            global_min = gmin
-            global_max = gmax
-            print(f"[INFO] Global CAM range across this run: min={global_min:.6f}, max={global_max:.6f}")
+            global_min_run = gmin
+            global_max_run = gmax
+            print(f"[INFO] Global_run CAM range across this run: min={gmin:.6f}, max={gmax:.6f}")
+
+    # 2) global_task: per-episode min/max (requires episodes-json)
+    if args.norm_mode == "global_task":
+        if not args.episodes_json:
+            raise ValueError("global_task mode requires --episodes-json")
+        episodes = load_episodes(args.episodes_json)
+        print(f"[INFO] Loaded {len(episodes)} episodes from {args.episodes_json}")
+        # init stats
+        for i in range(len(episodes)):
+            ep_stats_min[i] = np.inf
+            ep_stats_max[i] = -np.inf
+
+        for idx, npz_path in enumerate(steps):
+            ep_idx = episode_for_index(idx, episodes)
+            if ep_idx is None:
+                continue
+            try:
+                data = np.load(npz_path, allow_pickle=True)
+            except Exception as e:
+                print(f"[WARN] Failed to load {os.path.basename(npz_path)} for global_task stats: {e}")
+                continue
+            keys = list(data.keys())
+            cam_keys = [k for k in keys if k.startswith("cam/")]
+            if only_cams:
+                cam_keys = [ck for ck in cam_keys if ck.split("/", 1)[-1] in only_cams]
+            for ck in cam_keys:
+                cam_raw = _cam_to_2d(np.asarray(data[ck]))
+                if cam_raw.size == 0:
+                    continue
+                local_min = float(cam_raw.min())
+                local_max = float(cam_raw.max())
+                if local_min < ep_stats_min[ep_idx]:
+                    ep_stats_min[ep_idx] = local_min
+                if local_max > ep_stats_max[ep_idx]:
+                    ep_stats_max[ep_idx] = local_max
+
+        # report
+        for i, ep in enumerate(episodes):
+            mn, mx = ep_stats_min[i], ep_stats_max[i]
+            if np.isfinite(mn) and np.isfinite(mx):
+                print(
+                    f"[INFO] Episode {i} (task_id={ep.get('task_id')}) "
+                    f"CAM range: min={mn:.6f}, max={mx:.6f}"
+                )
+            else:
+                print(
+                    f"[WARN] No CAM stats for episode {i} (task_id={ep.get('task_id')})"
+                )
 
     # ---- render overlays ----
-    for npz_path in steps:
+    for idx, npz_path in enumerate(steps):
         try:
+            # Decide per-call mode + bounds passed into _normalize_cam
+            if args.norm_mode == "per_image":
+                mode = "per_image"
+                gmin = None
+                gmax = None
+            elif args.norm_mode == "global_run":
+                # Always use one global range
+                if global_min_run is None or global_max_run is None:
+                    mode = "per_image"
+                    gmin = None
+                    gmax = None
+                else:
+                    mode = "global"
+                    gmin = global_min_run
+                    gmax = global_max_run
+            elif args.norm_mode == "global_task":
+                if episodes is None:
+                    mode = "per_image"
+                    gmin = None
+                    gmax = None
+                else:
+                    ep_idx = episode_for_index(idx, episodes)
+                    if ep_idx is None or not np.isfinite(ep_stats_min[ep_idx]) or not np.isfinite(ep_stats_max[ep_idx]):
+                        # frame not in any episode or stats missing → fall back per-image
+                        mode = "per_image"
+                        gmin = None
+                        gmax = None
+                    else:
+                        mode = "global"
+                        gmin = ep_stats_min[ep_idx]
+                        gmax = ep_stats_max[ep_idx]
+            else:
+                # Just in case; shouldn't happen due to choices
+                mode = "per_image"
+                gmin = None
+                gmax = None
+
             overlay_one(
                 npz_path,
+                step_idx=idx,
                 alpha=args.alpha,
                 cmap_name=args.cmap,
                 max_cams=args.max_cams,
@@ -381,9 +496,9 @@ def main():
                 only_cams=only_cams,
                 out_size=tuple(args.out_size) if args.out_size else None,
                 scale=args.scale,
-                norm_mode=args.norm_mode,
-                global_min=global_min,
-                global_max=global_max,
+                norm_mode=mode,
+                global_min=gmin,
+                global_max=gmax,
             )
         except Exception as e:
             print(f"[WARN] Failed on {os.path.basename(npz_path)}: {e}")
