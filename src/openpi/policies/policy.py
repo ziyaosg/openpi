@@ -80,6 +80,13 @@ class Policy(BasePolicy):
 
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
+
+        want_cam = False
+        # we tuck this request into a side-band debug channel: obs["debug"] = {"return_image_grad_cam": True}
+        if isinstance(obs, dict) and "debug" in obs and isinstance(obs["debug"], dict):
+            want_cam = bool(obs["debug"].get("return_image_grad_cam", False))
+        sample_kwargs["return_image_grad_cam"] = want_cam
+
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
@@ -89,10 +96,23 @@ class Policy(BasePolicy):
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
+        
+        # outputs = {
+        #     "state": inputs["state"],
+        #     "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+        # }
+        sample_out = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
+        aux = None
+        actions = sample_out
+        if isinstance(sample_out, tuple) and len(sample_out) == 2:
+            actions, aux = sample_out
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
+            "actions": actions,
         }
+        if aux is not None:
+            outputs["debug"] = aux
+
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)

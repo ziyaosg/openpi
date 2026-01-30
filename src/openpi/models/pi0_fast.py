@@ -15,6 +15,10 @@ import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 
+
+from openpi.models.utils.grad_cam import gradcam_from_patch_tokens
+
+
 logger = logging.getLogger("openpi")
 
 PALIGEMMA_EOS_TOKEN = 1
@@ -194,6 +198,77 @@ class Pi0FAST(_model.BaseModel):
             jnp.concatenate(ar_mask, axis=1),
         )
 
+    def embed_inputs_with_image_meta(
+        self, obs: _model.Observation
+    ):
+        """
+        Like embed_inputs(), but also returns:
+          - image_slices: dict[name] = (start_idx, end_idx) within the concatenated token sequence
+          - image_grids: dict[name] = (Hp, Wp) patch grid for that camera view
+        """
+        input_mask = []
+        ar_mask = []
+        token_embeddings = []
+
+        image_slices: dict[str, tuple[int, int]] = {}
+        image_grids: dict[str, tuple[int, int]] = {}
+
+        cur = 0
+
+        # embed images
+        for name in obs.images:
+            # This runs SigLIP ViT
+            image_token_embeddings, img_out = self.PaliGemma.img(obs.images[name], train=False)
+            # image_token_embeddings: (B, Np, D)
+            token_embeddings.append(image_token_embeddings)
+
+            input_mask.append(
+                einops.repeat(
+                    obs.image_masks[name],
+                    "b -> b s",
+                    s=image_token_embeddings.shape[1],
+                )
+            )
+            # image tokens attend to each other --> AR mask = 0
+            ar_mask.append(0 * input_mask[-1])
+
+            start = cur
+            end = cur + image_token_embeddings.shape[1]
+            image_slices[name] = (start, end)
+            cur = end
+
+            # Use SigLIP internal grid (h,w) from its conv stem / pre_logits_2d tensor.
+            # In siglip.py, out["pre_logits_2d"] has shape (B, h, w, D') after encoder.
+            # For pool_type="none" + num_classes=paligemma_width, tokens correspond to h*w patches.
+            if "pre_logits_2d" in img_out:
+                Hp, Wp = int(img_out["pre_logits_2d"].shape[1]), int(img_out["pre_logits_2d"].shape[2])
+            elif "stem" in img_out:
+                Hp, Wp = int(img_out["stem"].shape[1]), int(img_out["stem"].shape[2])
+            else:
+                raise Exception("Shape of image patches [Hp, Wp] cannot be determined.")
+            #     # Fallback: assume square-ish; best to avoid this branch.
+            #     Hp = int(jnp.sqrt(image_token_embeddings.shape[1]))
+            #     Wp = image_token_embeddings.shape[1] // Hp
+            image_grids[name] = (Hp, Wp)
+
+        # add tokenized inputs
+        assert obs.tokenized_prompt is not None, "Tokenized prompt is required"
+        assert obs.tokenized_prompt_mask is not None, "Tokenized prompt mask is required"
+        assert obs.token_ar_mask is not None, "Token auto-regressive mask is required"
+        # This runs the Gemma embedding layer to convert text tokens into embeddings
+        tokenized_inputs_embeddings = self.PaliGemma.llm(obs.tokenized_prompt, embed_only=True)
+        token_embeddings.append(tokenized_inputs_embeddings)
+        input_mask.append(obs.tokenized_prompt_mask)
+        ar_mask.append(obs.token_ar_mask)
+
+        return (
+            jnp.concatenate(token_embeddings, axis=1),
+            jnp.concatenate(input_mask, axis=1),
+            jnp.concatenate(ar_mask, axis=1),
+            image_slices,   # where each camera’s tokens live
+            image_grids,    # how to reshape each camera’s patch tokens into 2D
+        )
+
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
@@ -240,6 +315,7 @@ class Pi0FAST(_model.BaseModel):
         *,
         max_decoding_steps: int | at.Int[at.Array, ""] = 256,
         temperature: float = 0.0,
+        return_image_grad_cam: bool = False,
     ) -> _model.Actions:
         # TODO: this is a hack to get the image keys.
         observation = _model.preprocess_observation(
@@ -247,7 +323,14 @@ class Pi0FAST(_model.BaseModel):
         )
 
         # embed inputs
-        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
+        # prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
+        if return_image_grad_cam:
+            prefix_token_embeddings, prefix_mask, prefix_ar_mask, image_slices, image_grids = \
+                self.embed_inputs_with_image_meta(observation)
+        else:
+            prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
+            image_slices, image_grids = {}, {}
+
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
 
         # left to right align all input token sequences
@@ -267,7 +350,65 @@ class Pi0FAST(_model.BaseModel):
         )
 
         # prepare decoding -- final logit decodes the first token
-        last_logit = prefix_logits[:, -1:]
+        # last_logit shape: (B, S, V)
+        # B: batch size
+        # S: number of prefix tokens (all image tokens + prompt tokens)
+        # V: vocab size (action tokens live in this vocab)
+        # this is literally the model’s probability distribution over the first action token
+        last_logit = prefix_logits[:, -1:]  # shape (B, 1, V)
+        grad_cam = None
+        if return_image_grad_cam and image_slices:
+            # Choose the target token for the FIRST decoded token (step 0).
+            # Use greedy choice to make attribution deterministic.
+            target_token = jnp.argmax(last_logit, axis=-1)  # (B, 1) typically; picks the highest-scoring token v in the vocab
+
+            # Define score function: takes prefix embeddings -> scalar score
+            # We compute y = sum over batch of the chosen token logit at the next-token position.
+            def score_fn(prefix_emb):
+                """
+                    - takes prefix embeddings (same shape as prefix_token_embeddings)
+                    - runs a forward pass
+                    - returns a single scalar score y
+                """
+                # IMPORTANT: prefix_mask / prefix_ar_mask come from the real observation and are treated constant here.
+                attn = make_attn_mask(prefix_mask, prefix_ar_mask)
+
+                # Align exactly the same way as the actual run
+                prefix_emb_aligned, mask_aligned, attn_aligned = left_to_right_align(prefix_emb, prefix_mask, attn)
+
+                # prefill_size2 = prefix_emb_aligned.shape[1]   # total sequence length S
+                # prefill_len2 = jnp.sum(mask_aligned, axis=-1) # number of valid tokens (not padding)
+
+                attn_aligned = jnp.pad(attn_aligned, ((0, 0), (0, 0), (0, max_decoding_steps)))
+                positions2 = jnp.cumsum(mask_aligned, axis=-1) - 1
+
+                logits2, _, _ = self.PaliGemma.llm(
+                    embedded_prefix=prefix_emb_aligned, mask=attn_aligned, positions=positions2, decode=True
+                )
+                ll = logits2[:, -1:]  # (B, 1, V)
+
+                # For each batch element, this selects the scalar logit corresponding to the chosen token id.
+                tid = target_token if target_token.ndim == 2 else target_token[:, None] # (B, 1)
+                chosen = jnp.take_along_axis(ll, tid[..., None], axis=-1)  # (B, 1, 1)
+                return jnp.sum(chosen)
+            
+            # Backprop step
+            # Gradient wrt *prefix embeddings* (same shape as prefix_token_embeddings)
+            # dy/dA = f'(A) = score_fn'(prefix_token_embeddings)
+            grads = jax.grad(score_fn)(prefix_token_embeddings)  # (B, S, D)
+
+            # Intercept the image patch tokens A
+            # Build per-camera heatmaps from the gradient slice corresponding to each image token segment
+            grad_cam = {}
+            for cam_name, (s0, s1) in image_slices.items():
+                patch_tokens = prefix_token_embeddings[:, s0:s1, :]  # This is A; (B, Np, D)
+                patch_grads  = grads[:, s0:s1, :]                    # This is dy/dA; (B, Np, D)
+                grid_hw = image_grids[cam_name]                      # Reshape patch tokens into a 2D grid Np = Hp*Wp; (Hp, Wp)
+
+                grad_cam[cam_name] = gradcam_from_patch_tokens(
+                    patch_tokens, patch_grads, grid_hw, relu=True
+                )
+
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
 
         def step(carry):
@@ -310,4 +451,8 @@ class Pi0FAST(_model.BaseModel):
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
             cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
         )
+        # return output_tokens
+        if return_image_grad_cam:
+            return output_tokens, {"image_grad_cam_patches": grad_cam}
         return output_tokens
+
