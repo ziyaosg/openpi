@@ -1,6 +1,6 @@
 import dataclasses
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import einops
 import flax.nnx as nnx
@@ -14,6 +14,8 @@ import openpi.models.gemma_fast as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
+
+from openpi.models.utils.grad_cam import gradcam_from_patch_tokens
 
 logger = logging.getLogger("openpi")
 
@@ -131,6 +133,16 @@ class Pi0FASTConfig(_model.BaseModelConfig):
         return nnx.Nothing
 
 
+@dataclasses.dataclass
+class Modality:
+    name: str # "img/front", "text", "joints"
+    type: str # "image", "text", "joints"
+    embedding: at.Array # (B, S, D)
+    input_mask: at.Array # (B, S)
+    ar_mask: at.Array # (B, S)
+    meta: Optional[dict[str, Any]] = None # slices, grid
+
+
 class Pi0FAST(_model.BaseModel):
     def __init__(self, config: Pi0FASTConfig, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
@@ -193,6 +205,130 @@ class Pi0FAST(_model.BaseModel):
             jnp.concatenate(input_mask, axis=1),
             jnp.concatenate(ar_mask, axis=1),
         )
+    
+    def get_patch_grid(self, img_token_embeddings, img_out: dict) -> tuple[int, int]:
+        Hp, Wp = (None, None)
+
+        if isinstance(img_out, dict) and "pre_logits_2d" in img_out:
+            Hp, Wp = int(img_out["pre_logits_2d"].shape[1]), int(img_out["pre_logits_2d"].shape[2])
+        elif isinstance(img_out, dict) and "stem" in img_out:
+            Hp, Wp = int(img_out["stem"].shape[1]), int(img_out["stem"].shape[2])
+        else:
+            Hp, Wp = int(jnp.sqrt(img_token_embeddings.shape[1])), int(img_token_embeddings.shape[1] // Hp)
+        
+        return Hp, Wp
+
+
+    def build_image_modality(self, obs: _model.Observation) -> list[Modality]:
+        image_modality: list[Modality] = []
+
+        for name in obs.images:
+            image_token_embeddings, img_out = self.PaliGemma.img(obs.images[name], train=False)
+            input_mask = einops.repeat(
+                    obs.image_masks[name],
+                    "b -> b s",
+                    s=image_token_embeddings.shape[1],
+                )
+
+            ar_mask = jnp.zeros_like(input_mask, dtype=jnp.int32)  # non-autoregressive
+            grid = self.get_patch_grid(
+                img_token_embeddings=image_token_embeddings, 
+                img_out=img_out
+            )
+
+            image_modality.append(Modality(
+                name=name,
+                type="image",
+                embedding=image_token_embeddings,
+                input_mask=input_mask,
+                ar_mask=ar_mask,
+                meta={"grid": grid},
+            ))
+
+        return image_modality
+
+    def compute_modality_grads(
+        self,
+        prefix_emb_unaligned,
+        prefix_mask_unaligned,
+        prefix_ar_mask_unaligned,
+        *,
+        max_decoding_steps: int,
+        target_token,
+    ):
+        def score_fn(prefix_emb_unaligned_inner):
+            """
+            - takes prefix embeddings (same shape as prefix_token_embeddings)
+            - runs a forward pass
+            - returns a single scalar score y
+            """
+            
+            # IMPORTANT: prefix_mask_unaligned / prefix_ar_mask_unaligned come from the real observation and are treated constant here.
+            attn = make_attn_mask(prefix_mask_unaligned, prefix_ar_mask_unaligned)
+
+            # Align exactly the same way as the actual run
+            emb_aligned, mask_aligned, attn_aligned = left_to_right_align(
+                prefix_emb_unaligned_inner, prefix_mask_unaligned, attn
+            )
+
+            # Pad attention mask to set the size of the KV cache (prefill_size + max_decoding_steps)
+            attn_aligned = jnp.pad(attn_aligned, ((0, 0), (0, 0), (0, max_decoding_steps)))
+            positions = jnp.cumsum(mask_aligned, axis=-1) - 1
+
+            logits, _, _ = self.PaliGemma.llm(
+                embedded_prefix=emb_aligned, mask=attn_aligned, positions=positions, decode=True
+            )
+            ll = logits[:, -1:]  # (B,1,V)
+
+            # For each batch element, select the scalar logit corresponding to the chosen token id.
+            tid = target_token if target_token.ndim == 2 else target_token[:, None]  # (B, 1)
+            chosen = jnp.take_along_axis(ll, tid[..., None], axis=-1)  # (B, 1, 1)
+            return jnp.sum(chosen)
+
+        # Backprop step
+        # Gradient wrt *prefix embeddings* (same shape as prefix_token_embeddings)
+        # dy/dA = score_fn'(prefix_token_embeddings)
+        grads_all = jax.grad(score_fn)(prefix_emb_unaligned)  # (B,S,D)
+        return grads_all
+
+    @at.typecheck
+    def embed_inputs_with_spans(self, obs: _model.Observation):
+        token_embeddings, input_masks, ar_masks = [], [], []
+        
+        image_modality = self.build_image_modality(obs)
+        text_modality = self.build_text_modality(obs)
+        modalities = image_modality + [text_modality]
+
+        spans = {"image": {}}
+        meta = {"image_grids": {}}
+        
+        cur = 0
+        for m in modalities:
+            token_embeddings.append(m.embedding)
+            input_masks.append(m.input_mask)
+            ar_masks.append(m.ar_mask)
+
+            start = cur
+            end = start + int(m.embedding.shape[1])
+            cur = end
+
+            # Spans
+            if m.type == "image":
+                spans["image"][m.name] = (start, end)
+            else:
+                spans[m.name] = (start, end)
+
+            # Image grids
+            if m.meta and "grid" in m.meta:
+                meta["image_grids"][m.name] = m.meta["grid"]
+
+        return (
+            jnp.concatenate(token_embeddings, axis=1),
+            jnp.concatenate(input_masks, axis=1),
+            jnp.concatenate(ar_masks, axis=1),
+            spans,
+            meta,
+        )
 
     @override
     def compute_loss(
@@ -247,27 +383,88 @@ class Pi0FAST(_model.BaseModel):
         )
 
         # embed inputs
-        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        prefix_emb_unaligned, prefix_mask_unaligned, prefix_ar_mask_unaligned, spans, meta = \
+            self.embed_inputs_with_spans(observation)
+        # prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
+        prefix_attn_mask_unaligned = make_attn_mask(prefix_mask_unaligned, prefix_ar_mask_unaligned)
 
         # left to right align all input token sequences
-        prefix_token_embeddings, prefix_mask, prefix_attn_mask = left_to_right_align(
-            prefix_token_embeddings, prefix_mask, prefix_attn_mask
+        prefix_emb_aligned, prefix_mask_aligned, prefix_attn_mask_aligned = left_to_right_align(
+            prefix_emb_unaligned, prefix_mask_unaligned, prefix_attn_mask_unaligned
         )
-        prefill_size = prefix_token_embeddings.shape[1]
-        prefill_len = jnp.sum(prefix_mask, axis=-1)
+        prefill_size = prefix_emb_aligned.shape[1]
+        prefill_len = jnp.sum(prefix_mask_aligned, axis=-1)
         prefix_start = prefill_size - prefill_len
 
         # first fill KV cache with a forward pass of the prefix
         # pad attention mask to set the size of the KV cache (prefill_size + max_decoding_steps)
-        prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
-        prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
+        prefix_attn_mask_aligned = jnp.pad(prefix_attn_mask_aligned, ((0, 0), (0, 0), (0, max_decoding_steps)))
+        prefix_positions = jnp.cumsum(prefix_mask_aligned, axis=-1) - 1
         prefix_logits, kv_cache, _ = self.PaliGemma.llm(
-            embedded_prefix=prefix_token_embeddings, mask=prefix_attn_mask, positions=prefix_positions, decode=True
+            embedded_prefix=prefix_emb_aligned, mask=prefix_attn_mask_aligned, positions=prefix_positions, decode=True
         )
 
         # prepare decoding -- final logit decodes the first token
+        # last_logit shape: (B, 1, V)
+        # B: batch size (typically 1 at inference)
+        # V: vocab size (action tokens live in this vocab)
+        # this is the model’s logit distribution for the FIRST decoded action token (step 0)
         last_logit = prefix_logits[:, -1:]
+
+        # debug dict containing attributions.
+        debug = None
+
+        # choose the target token for the FIRST decoded token (step 0)
+        # use greedy choice to make attribution deterministic
+        target_token = jnp.argmax(last_logit, axis=-1)  # (B, 1) token id in vocab
+
+        # calculate gradients
+        grads = self.compute_modality_grads(
+            prefix_emb_unaligned,
+            prefix_mask_unaligned,
+            prefix_ar_mask_unaligned,
+            max_decoding_steps=int(max_decoding_steps),
+            target_token=target_token,
+        )  # (B,S,D)
+
+        # collect attributions into a single debug payload
+        debug = {"attr": {}, "spans": spans, "meta": meta}
+
+        # -----------------------
+        # Image Grad-CAM (per view)
+        # -----------------------
+        image_attr = {}
+        for cam_name, (s0, s1) in spans["image"].items():
+            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]     # This is A; (B, Np, D)
+            patch_grads  = grads[:, s0:s1, :]                    # Slicing for only the image part; this is dy/dA; (B, Np, D)
+            grid_hw = meta["image_grids"][cam_name]              # Np = Hp*Wp; (Hp, Wp)
+
+            image_attr[cam_name] = gradcam_from_patch_tokens(
+                patch_tokens,
+                patch_grads,
+                grid_hw,
+                relu=True          # keep only positive influence (per classic Grad-CAM)
+            )
+        debug["attr"]["image"] = image_attr
+
+        # -----------------------
+        # Text attribution (per token)
+        # -----------------------
+        t0, t1 = spans["text"]
+        text_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D) token embeddings
+        text_grads  = grads[:, t0:t1, :]                    # Slicing for the text modality; (B, Nt, D) dy/dA
+        scores = jnp.sum(text_tokens * text_grads, axis=-1) # (B, Nt)
+
+        # mask padding tokens (keep raw; no normalization here)
+        if observation.tokenized_prompt_mask is not None:
+            scores = scores * observation.tokenized_prompt_mask.astype(scores.dtype)
+
+        debug["attr"]["text"] = {
+            "scores": scores,  # raw per-token scores (B, Nt)
+            "token_ids": observation.tokenized_prompt,
+            "token_mask": observation.tokenized_prompt_mask,
+        }
+
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
 
         def step(carry):
@@ -310,4 +507,6 @@ class Pi0FAST(_model.BaseModel):
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
             cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
         )
-        return output_tokens
+        if debug is not None:
+            return output_tokens, debug
+        return output_tokens, None

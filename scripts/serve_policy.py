@@ -5,6 +5,8 @@ import socket
 
 import tyro
 
+from datetime import datetime
+
 from openpi.policies import policy as _policy
 from openpi.policies import policy_config as _policy_config
 from openpi.serving import websocket_policy_server
@@ -102,7 +104,8 @@ def main(args: Args) -> None:
 
     # Record the policy's behavior.
     if args.record:
-        policy = _policy.PolicyRecorder(policy, "policy_records")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        policy = _policy.PolicyRecorder(policy, f"/data/ziyao/policy_records_{timestamp}")
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)

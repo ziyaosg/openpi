@@ -67,7 +67,8 @@ class LiberoInputs(transforms.DataTransformFn):
         wrist_image = _parse_image(data["observation/wrist_image"])
 
         # Create inputs dict. Do not change the keys in the dict below.
-        inputs = {
+        inputs = dict(data)
+        inputs.update({
             "state": state,
             "image": {
                 "base_0_rgb": base_image,
@@ -81,7 +82,7 @@ class LiberoInputs(transforms.DataTransformFn):
                 # Mask any non-existent images with False (if ``mask_padding`` is True).
                 "right_wrist_0_rgb": np.False_ if mask_padding else np.True_,
             },
-        }
+        })
 
         # Pad actions to the model action dimension. Keep this for your own dataset.
         # Actions are only available during training.
@@ -114,4 +115,6 @@ class LiberoOutputs(transforms.DataTransformFn):
         # dimension, we need to now parse out the correct number of actions in the return dict.
         # For Libero, we only return the first 7 actions (since the rest is padding).
         # For your own dataset, replace `7` with the action dimension of your dataset.
-        return {"actions": np.asarray(data["actions"][:, :7])}
+        outputs = dict(data)
+        outputs.update({"actions": np.asarray(data["actions"][:, :7])})
+        return outputs

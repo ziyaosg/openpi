@@ -48,13 +48,33 @@ class Policy(BasePolicy):
 
         start_time = time.monotonic()
         self._rng, sample_rng = jax.random.split(self._rng)
+        actions, aux = self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs)
+        model_time = time.monotonic() - start_time
+
         outputs = {
-            "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs),
+            "state": inputs["state"], 
+            "actions": actions
         }
+
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-        model_time = time.monotonic() - start_time
+
+        def _hostify_for_msgpack(x):
+            # Leave non-arrays alone (ints, tuples, strings)
+            if not hasattr(x, "shape"):
+                return x
+
+            x = jax.device_get(x)          # JAX -> host
+            x = np.asarray(x)
+
+            # msgpack_numpy typically supports: uint8/int32/int64/float32/float64/bool
+            if x.dtype == np.dtype("bfloat16") or x.dtype == np.float16:
+                x = x.astype(np.float32)
+
+            return x
+
+        if aux is not None:
+            outputs["debug"] = jax.tree.map(_hostify_for_msgpack, aux)
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
