@@ -247,6 +247,22 @@ class Pi0FAST(_model.BaseModel):
 
         return image_modality
 
+    def build_text_modality(self, obs: _model.Observation) -> Modality:
+        assert obs.tokenized_prompt is not None, "Tokenized prompt is required"
+        assert obs.tokenized_prompt_mask is not None, "Tokenized prompt mask is required"
+        assert obs.token_ar_mask is not None, "Token auto-regressive mask is required"
+
+        tokenized_inputs_embeddings = self.PaliGemma.llm(obs.tokenized_prompt, embed_only=True)  # (B, S, D)
+
+        return Modality(
+            name="text",
+            type="text",
+            embedding=tokenized_inputs_embeddings,
+            input_mask=obs.tokenized_prompt_mask,
+            ar_mask=obs.token_ar_mask,
+            meta={}
+        )
+
     def compute_modality_grads(
         self,
         prefix_emb_unaligned,
