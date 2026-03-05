@@ -1,6 +1,7 @@
 import collections
 import dataclasses
 import logging
+import json
 import math
 import pathlib
 
@@ -72,6 +73,10 @@ def eval_libero(args: Args) -> None:
 
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
 
+    # episode summary bookkeeping
+    episode_summaries = []
+    infer_global_idx = 0  # increments once per client.infer(...), matching step_*.npy numbering
+
     # Start evaluation
     total_episodes, total_successes = 0, 0
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
@@ -101,6 +106,9 @@ def eval_libero(args: Args) -> None:
             replay_images = []
 
             logging.info(f"Starting episode {task_episodes+1}...")
+            start_idx = infer_global_idx
+            end_idx = infer_global_idx - 1 
+
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -142,6 +150,8 @@ def eval_libero(args: Args) -> None:
 
                         # Query model to get action
                         action_chunk = client.infer(element)["actions"]
+                        end_idx = infer_global_idx
+                        infer_global_idx += 1
                         assert (
                             len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
@@ -163,6 +173,16 @@ def eval_libero(args: Args) -> None:
 
             task_episodes += 1
             total_episodes += 1
+            episode_summaries.append(
+                {
+                    "episode_num": int(episode_idx),
+                    "task_id": int(task_id),
+                    "task": str(task_description),
+                    "start_idx": int(start_idx),
+                    "end_idx": int(end_idx),
+                    "success": bool(done),
+                }
+            )
 
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
@@ -181,9 +201,13 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
-
+    
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
+    out_path = pathlib.Path(args.video_out_path) / "episode_summaries.json"
+    with open(out_path, "w") as f:
+        json.dump(episode_summaries, f, indent=2)
+    logging.info(f"Saved episode summaries to: {out_path}")
 
 
 def _get_libero_env(task, resolution, seed):
