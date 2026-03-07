@@ -247,8 +247,8 @@ class Pi0FAST(_model.BaseModel):
             ))
 
         return image_modality
-
-    def build_text_modality(self, obs: _model.Observation) -> Modality:
+    
+    def build_full_text_modality(self, obs: _model.Observation) -> Modality:
         assert obs.tokenized_prompt is not None, "Tokenized prompt is required"
         assert obs.tokenized_prompt_mask is not None, "Tokenized prompt mask is required"
         assert obs.token_ar_mask is not None, "Token auto-regressive mask is required"
@@ -261,6 +261,30 @@ class Pi0FAST(_model.BaseModel):
             embedding=tokenized_inputs_embeddings,
             input_mask=obs.tokenized_prompt_mask,
             ar_mask=obs.token_ar_mask,
+            meta={}
+        )
+    
+    def build_task_modality(self, obs: _model.Observation, text_modality: Modality) -> Modality:
+        task_token_len = obs.task_token_len
+
+        return Modality(
+            name="task",
+            type="text",
+            embedding=text_modality.embedding[:, :task_token_len, :],
+            input_mask=text_modality.input_mask[:, :task_token_len],
+            ar_mask=text_modality.ar_mask[:, :task_token_len],
+            meta={}
+        )
+    
+    def build_joint_modality(self, obs: _model.Observation, text_modality: Modality):
+        task_token_len = obs.task_token_len
+
+        return Modality(
+            name="joints",
+            type="text",
+            embedding=text_modality.embedding[:, task_token_len:, :],
+            input_mask=text_modality.input_mask[:, task_token_len:],
+            ar_mask=text_modality.ar_mask[:, task_token_len:],
             meta={}
         )
 
@@ -313,8 +337,14 @@ class Pi0FAST(_model.BaseModel):
         token_embeddings, input_masks, ar_masks = [], [], []
         
         image_modality = self.build_image_modality(obs)
-        text_modality = self.build_text_modality(obs)
-        modalities = image_modality + [text_modality]
+        full_text_modality = self.build_full_text_modality(obs)
+
+        task_modality = self.build_task_modality(obs, full_text_modality) # Name is 'task'
+        joint_modality = self.build_joint_modality(obs, full_text_modality) # Name is 'joints'
+
+        modalities = image_modality + [task_modality, joint_modality]
+
+        # modalities = image_modality + [full_text_modality]
 
         spans = {"image": {}}
         meta = {"image_grids": {}}
@@ -333,6 +363,7 @@ class Pi0FAST(_model.BaseModel):
             if m.type == "image":
                 spans["image"][m.name] = (start, end)
             else:
+                # Possible m.name: "task" and "joints"
                 spans[m.name] = (start, end)
 
             # Image grids
@@ -465,18 +496,18 @@ class Pi0FAST(_model.BaseModel):
         debug["attr"]["image"] = image_attr
 
         # -----------------------
-        # Text attribution (per token)
+        # Task attribution (per token)
         # -----------------------
-        t0, t1 = spans["text"]
-        text_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D) token embeddings
-        text_grads  = grads[:, t0:t1, :]                    # Slicing for the text modality; (B, Nt, D) dy/dA
-        scores = jnp.sum(text_tokens * text_grads, axis=-1) # (B, Nt)
+        t0, t1 = spans["task"]
+        task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D) token embeddings
+        task_grads  = grads[:, t0:t1, :]                    # Slicing for the task modality; (B, Nt, D) dy/dA
+        scores = jnp.sum(task_tokens * task_grads, axis=-1) # (B, Nt)
 
         # mask padding tokens (keep raw; no normalization here)
         if observation.tokenized_prompt_mask is not None:
             scores = scores * observation.tokenized_prompt_mask.astype(scores.dtype)
 
-        debug["attr"]["text"] = {
+        debug["attr"]["task"] = {
             "scores": scores,  # raw per-token scores (B, Nt)
             "token_ids": observation.tokenized_prompt,
             "token_mask": observation.tokenized_prompt_mask,
