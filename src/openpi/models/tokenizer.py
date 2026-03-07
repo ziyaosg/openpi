@@ -176,8 +176,18 @@ class BinningTokenizer:
 
         # Convention: prefix includes prompt and string-representation of state, followed by ';'
         state_str = " ".join(map(str, discretized_state))
-        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
-        prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
+
+        task_segment = f"Task: {cleaned_text}, "
+        state_segment = f"State: {state_str};\n"
+
+        task_tokens = self._paligemma_tokenizer.encode(task_segment, add_bos=True)
+        state_tokens = self._paligemma_tokenizer.encode(state_segment, add_bos=False)
+
+        prefix_tokens = task_tokens + state_tokens
+        task_len = len(task_tokens)
+
+        # prefix = f"Task: {cleaned_text}, State: {state_str};\n"
+        # prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
             raise NotImplementedError("BinningTokenizer does not support encoding actions atm (only for inference use)")
@@ -209,7 +219,7 @@ class BinningTokenizer:
             ar_mask = ar_mask[: self._max_len]
             loss_mask = loss_mask[: self._max_len]
 
-        return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
+        return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask), np.int32(task_len)
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens

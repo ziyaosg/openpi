@@ -91,8 +91,12 @@ class Observation(Generic[ArrayT]):
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
+
     # Tokenized prompt mask.
     tokenized_prompt_mask: at.Bool[ArrayT, "*b l"] | None = None
+
+    # Length of task (in tokens) within tokenized_prompt (includes BOS if you used add_bos=True for task part).
+    task_token_len: at.Int[ArrayT, "*b"] | None = None
 
     # pi0-fast model specific fields.
 
@@ -117,6 +121,7 @@ class Observation(Generic[ArrayT]):
             state=data["state"],
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
+            task_token_len=data.get("task_token_len"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
         )
@@ -196,6 +201,7 @@ def preprocess_observation(
         state=observation.state,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
+        task_token_len=observation.task_token_len,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
     )
