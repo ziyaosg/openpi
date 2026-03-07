@@ -499,19 +499,28 @@ class Pi0FAST(_model.BaseModel):
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
-        task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D) token embeddings
-        task_grads  = grads[:, t0:t1, :]                    # Slicing for the task modality; (B, Nt, D) dy/dA
-        scores = jnp.sum(task_tokens * task_grads, axis=-1) # (B, Nt)
+        task_token_len = observation.task_token_len
+
+        task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D)
+        task_grads  = grads[:, t0:t1, :]                 # (B, Nt, D)
+        scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
+
+        # Slice prompt tokens to task span
+        task_token_ids = observation.tokenized_prompt[:, :task_token_len]
 
         # mask padding tokens (keep raw; no normalization here)
+        task_token_mask = None
         if observation.tokenized_prompt_mask is not None:
-            scores = scores * observation.tokenized_prompt_mask.astype(scores.dtype)
+            task_token_mask = observation.tokenized_prompt_mask[:, :task_token_len]
+            scores = scores * task_token_mask.astype(scores.dtype)
 
         debug["attr"]["task"] = {
-            "scores": scores,  # raw per-token scores (B, Nt)
-            "token_ids": observation.tokenized_prompt,
-            "token_mask": observation.tokenized_prompt_mask,
+            "scores": scores,                 # (B, Nt)
+            "token_ids": task_token_ids,      # (B, Nt)
+            "token_mask": task_token_mask,    # (B, Nt)
         }
+
+        
 
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
 
