@@ -520,8 +520,31 @@ class Pi0FAST(_model.BaseModel):
             "token_mask": task_token_mask,    # (B, Nt)
         }
 
-        
+        # -----------------------
+        # Joint attribution (per token)
+        # -----------------------
+        j0, j1 = spans["joints"]
 
+        joint_tokens = prefix_emb_unaligned[:, j0:j1, :]  # (B, Nt, D)
+        joint_grads  = grads[:, j0:j1, :]                 # (B, Nt, D)
+        scores = jnp.sum(joint_tokens * joint_grads, axis=-1)  # (B, Nt)
+
+        # Slice prompt tokens to joint span (after task tokens)
+        joint_token_ids = observation.tokenized_prompt[:, task_token_len:]
+
+        # mask padding tokens (keep raw; no normalization here)
+        joint_token_mask = None
+        if observation.tokenized_prompt_mask is not None:
+            joint_token_mask = observation.tokenized_prompt_mask[:, task_token_len:]
+            scores = scores * joint_token_mask.astype(scores.dtype)
+
+        debug["attr"]["joints"] = {
+            "scores": scores,               # (B, Nj)
+            "token_ids": joint_token_ids,   # (B, Nj)
+            "token_mask": joint_token_mask, # (B, Nj)
+        }
+        
+        
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
 
         def step(carry):
