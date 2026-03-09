@@ -265,7 +265,7 @@ class Pi0FAST(_model.BaseModel):
         )
     
     def build_task_modality(self, obs: _model.Observation, text_modality: Modality) -> Modality:
-        task_token_len = obs.task_token_len
+        task_token_len = int(obs.task_token_len[0])
 
         return Modality(
             name="task",
@@ -277,7 +277,7 @@ class Pi0FAST(_model.BaseModel):
         )
     
     def build_joint_modality(self, obs: _model.Observation, text_modality: Modality):
-        task_token_len = obs.task_token_len
+        task_token_len = int(obs.task_token_len[0])
 
         return Modality(
             name="joints",
@@ -499,7 +499,7 @@ class Pi0FAST(_model.BaseModel):
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
-        task_token_len = observation.task_token_len
+        task_token_len = int(observation.task_token_len[0])
 
         task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D)
         task_grads  = grads[:, t0:t1, :]                 # (B, Nt, D)
