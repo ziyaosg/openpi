@@ -55,7 +55,10 @@ class FASTTokenizer:
 
     def tokenize(
         self, prompt: str, state: np.ndarray, actions: np.ndarray | None
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[
+            np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+            np.int32, np.ndarray, np.ndarray, np.ndarray
+        ]:
         cleaned_text = prompt.lower().strip().replace("_", " ")
 
         # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
@@ -67,7 +70,21 @@ class FASTTokenizer:
         task_segment = f"Task: {cleaned_text}, "
         state_segment = f"State: {state_str};\n"
 
-        task_tokens = self._paligemma_tokenizer.encode(task_segment, add_bos=True)
+        # task_tokens = self._paligemma_tokenizer.encode(task_segment, add_bos=True)
+        task_proto_output = self._paligemma_tokenizer.encode(task_segment, out_type="immutable_proto")
+
+        piece_ids = [int(p.id) for p in task_proto_output.pieces]
+        piece_begin = [int(p.begin) for p in task_proto_output.pieces]
+        piece_end = [int(p.end) for p in task_proto_output.pieces]
+
+        bos_id = int(self._paligemma_tokenizer.bos_id())
+
+        task_piece_id = [bos_id] + piece_ids
+        task_piece_begin = [0] + piece_begin
+        task_piece_end = [0] + piece_end
+
+        task_tokens = task_piece_id
+
         state_tokens = self._paligemma_tokenizer.encode(state_segment, add_bos=False)
 
         prefix_tokens = task_tokens + state_tokens
@@ -116,7 +133,28 @@ class FASTTokenizer:
             ar_mask = ar_mask[: self._max_len]
             loss_mask = loss_mask[: self._max_len]
 
-        return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask), np.int32(task_len)
+        effective_task_len = min(len(task_piece_id), self._max_len)
+
+        task_piece_id = task_piece_id[:effective_task_len]
+        task_piece_begin = task_piece_begin[:effective_task_len]
+        task_piece_end = task_piece_end[:effective_task_len]
+
+        if effective_task_len < self._max_len:
+            pad_n = self._max_len - effective_task_len
+            task_piece_id = task_piece_id + [0] * pad_n
+            task_piece_begin = task_piece_begin + [0] * pad_n
+            task_piece_end = task_piece_end + [0] * pad_n
+
+        return (
+            np.asarray(tokens, dtype=np.int32),
+            np.asarray(token_mask, dtype=bool),
+            np.asarray(ar_mask, dtype=np.int32),
+            np.asarray(loss_mask, dtype=bool),
+            np.int32(effective_task_len),
+            np.asarray(task_piece_id, dtype=np.int32),
+            np.asarray(task_piece_begin, dtype=np.int32),
+            np.asarray(task_piece_end, dtype=np.int32),
+        )
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens

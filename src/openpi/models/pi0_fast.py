@@ -120,6 +120,9 @@ class Pi0FASTConfig(_model.BaseModelConfig):
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
                 task_token_len=jax.ShapeDtypeStruct([batch_size], jnp.int32),
+                task_piece_id=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
+                task_piece_begin=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
+                task_piece_end=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 token_ar_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.bool_),
             )
@@ -265,7 +268,7 @@ class Pi0FAST(_model.BaseModel):
         )
     
     def build_task_modality(self, obs: _model.Observation, text_modality: Modality) -> Modality:
-        task_token_len = obs.task_token_len
+        task_token_len = int(obs.task_token_len[0])
 
         return Modality(
             name="task",
@@ -277,7 +280,7 @@ class Pi0FAST(_model.BaseModel):
         )
     
     def build_joint_modality(self, obs: _model.Observation, text_modality: Modality):
-        task_token_len = obs.task_token_len
+        task_token_len = int(obs.task_token_len[0])
 
         return Modality(
             name="joints",
@@ -499,7 +502,7 @@ class Pi0FAST(_model.BaseModel):
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
-        task_token_len = observation.task_token_len
+        task_token_len = int(observation.task_token_len[0])
 
         task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D)
         task_grads  = grads[:, t0:t1, :]                 # (B, Nt, D)
@@ -515,9 +518,12 @@ class Pi0FAST(_model.BaseModel):
             scores = scores * task_token_mask.astype(scores.dtype)
 
         debug["attr"]["task"] = {
-            "scores": scores,                 # (B, Nt)
-            "token_ids": task_token_ids,      # (B, Nt)
-            "token_mask": task_token_mask,    # (B, Nt)
+            "scores": scores,                          # (B, Nt)
+            "token_ids": task_token_ids,               # (B, Nt)
+            "token_mask": task_token_mask,             # (B, Nt)
+            "task_piece_id": observation.task_piece_id[:, :task_token_len],
+            "task_piece_begin": observation.task_piece_begin[:, :task_token_len],
+            "task_piece_end": observation.task_piece_end[:, :task_token_len],
         }
 
         # -----------------------

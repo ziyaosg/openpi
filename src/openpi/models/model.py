@@ -98,6 +98,11 @@ class Observation(Generic[ArrayT]):
     # Length of task (in tokens) within tokenized_prompt (includes BOS if you used add_bos=True for task part).
     task_token_len: at.Int[ArrayT, "*b"] | None = None
 
+    # Task pieces
+    task_piece_id: at.Int[ArrayT, "*b t"] | None = None
+    task_piece_begin: at.Int[ArrayT, "*b t"] | None = None
+    task_piece_end: at.Int[ArrayT, "*b t"] | None = None
+
     # pi0-fast model specific fields.
 
     # Token auto-regressive mask (for FAST autoregressive model).
@@ -122,6 +127,9 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             task_token_len=data.get("task_token_len"),
+            task_piece_id=data.get("task_piece_id"),
+            task_piece_begin=data.get("task_piece_begin"),
+            task_piece_end=data.get("task_piece_end"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
         )
@@ -202,6 +210,9 @@ def preprocess_observation(
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         task_token_len=observation.task_token_len,
+        task_piece_id=observation.task_piece_id,
+        task_piece_begin=observation.task_piece_begin,
+        task_piece_end=observation.task_piece_end,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
     )
