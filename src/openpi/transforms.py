@@ -281,10 +281,10 @@ class TokenizeFASTInputs(DataTransformFn):
             "tokenized_prompt_mask": token_mask,
             "token_ar_mask": ar_mask,
             "token_loss_mask": loss_mask,
-            "task_token_len": np.asarray(task_len, dtype=np.int32),
-            "task_piece_id": task_piece_id,
-            "task_piece_begin": task_piece_begin,
-            "task_piece_end": task_piece_end,
+            "task_token_len": int(task_len),         # scalar
+            "task_piece_id": np.asarray(task_piece_id, dtype=np.int32),       # (t,)
+            "task_piece_begin": np.asarray(task_piece_begin, dtype=np.int32), # (t,)
+            "task_piece_end": np.asarray(task_piece_end, dtype=np.int32),     # (t,)
         }
 
 

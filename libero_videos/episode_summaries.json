@@ -1,0 +1,82 @@
+[
+  {
+    "episode_num": 0,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 0,
+    "end_idx": 53,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 54,
+    "end_idx": 103,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 104,
+    "end_idx": 146,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 147,
+    "end_idx": 250,
+    "success": false
+  },
+  {
+    "episode_num": 0,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 251,
+    "end_idx": 298,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 299,
+    "end_idx": 332,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 333,
+    "end_idx": 374,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 375,
+    "end_idx": 428,
+    "success": true
+  },
+  {
+    "episode_num": 0,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 429,
+    "end_idx": 532,
+    "success": false
+  },
+  {
+    "episode_num": 0,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 533,
+    "end_idx": 636,
+    "success": false
+  }
+]

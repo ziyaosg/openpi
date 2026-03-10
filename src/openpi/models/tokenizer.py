@@ -76,6 +76,7 @@ class FASTTokenizer:
         piece_ids = [int(p.id) for p in task_proto_output.pieces]
         piece_begin = [int(p.begin) for p in task_proto_output.pieces]
         piece_end = [int(p.end) for p in task_proto_output.pieces]
+        piece_surface = [p.surface for p in task_proto_output.pieces]
 
         bos_id = int(self._paligemma_tokenizer.bos_id())
 
@@ -88,7 +89,6 @@ class FASTTokenizer:
         state_tokens = self._paligemma_tokenizer.encode(state_segment, add_bos=False)
 
         prefix_tokens = task_tokens + state_tokens
-        task_len = len(task_tokens)
         
         # prefix = f"Task: {cleaned_text}, State: {state_str};\n"
         # prefix_tokens = self._paligemma_tokenizer.encode(prefix, add_bos=True)
