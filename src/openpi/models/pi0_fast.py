@@ -119,7 +119,10 @@ class Pi0FASTConfig(_model.BaseModelConfig):
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
-                task_token_len=jax.ShapeDtypeStruct([batch_size], jnp.int32),
+                task_token_len=jax.ShapeDtypeStruct([], jnp.int32),
+                task_piece_id=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+                task_piece_begin=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+                task_piece_end=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
                 token_ar_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.bool_),
             )
@@ -265,7 +268,8 @@ class Pi0FAST(_model.BaseModel):
         )
     
     def build_task_modality(self, obs: _model.Observation, text_modality: Modality) -> Modality:
-        task_token_len = int(obs.task_token_len[0])
+        assert obs.task_token_len is not None, "task_token_len is required"
+        task_token_len = obs.task_token_len
 
         return Modality(
             name="task",
@@ -275,9 +279,10 @@ class Pi0FAST(_model.BaseModel):
             ar_mask=text_modality.ar_mask[:, :task_token_len],
             meta={}
         )
-    
+
     def build_joint_modality(self, obs: _model.Observation, text_modality: Modality):
-        task_token_len = int(obs.task_token_len[0])
+        assert obs.task_token_len is not None, "task_token_len is required"
+        task_token_len = obs.task_token_len
 
         return Modality(
             name="joints",
@@ -499,50 +504,59 @@ class Pi0FAST(_model.BaseModel):
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
-        task_token_len = int(observation.task_token_len[0])
+        task_token_len = observation.task_token_len
 
-        task_tokens = prefix_emb_unaligned[:, t0:t1, :]  # (B, Nt, D)
-        task_grads  = grads[:, t0:t1, :]                 # (B, Nt, D)
-        scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
+        task_tokens = prefix_emb_unaligned[:, t0:t1, :]   # (B, Nt, D)
+        task_grads  = grads[:, t0:t1, :]                  # (B, Nt, D)
+        task_scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
 
-        # Slice prompt tokens to task span
         task_token_ids = observation.tokenized_prompt[:, :task_token_len]
 
-        # mask padding tokens (keep raw; no normalization here)
         task_token_mask = None
         if observation.tokenized_prompt_mask is not None:
             task_token_mask = observation.tokenized_prompt_mask[:, :task_token_len]
-            scores = scores * task_token_mask.astype(scores.dtype)
+            task_scores = task_scores * task_token_mask.astype(task_scores.dtype)
 
         debug["attr"]["task"] = {
-            "scores": scores,                 # (B, Nt)
-            "token_ids": task_token_ids,      # (B, Nt)
-            "token_mask": task_token_mask,    # (B, Nt)
+            "scores": task_scores,
+            "token_ids": task_token_ids,
+            "token_mask": task_token_mask,
+            "task_piece_id": observation.task_piece_id[:task_token_len],
+            "task_piece_begin": observation.task_piece_begin[:task_token_len],
+            "task_piece_end": observation.task_piece_end[:task_token_len],
         }
+
+        # jax.debug.print("task_piece_id: {}", observation.task_piece_id[:task_token_len])
+        # jax.debug.print("task_piece_begin: {}", observation.task_piece_begin[:task_token_len])
+        # jax.debug.print("task_piece_end: {}", observation.task_piece_end[:task_token_len])
+        # jax.debug.print("task token ids: {}", task_token_ids)
+        # jax.debug.print("task token mask: {}", task_token_mask)
+        # jax.debug.print("task scores: {}", task_scores)
 
         # -----------------------
         # Joint attribution (per token)
         # -----------------------
-        j0, j1 = spans["joints"]
+        # j0, j1 = spans["joints"]
 
-        joint_tokens = prefix_emb_unaligned[:, j0:j1, :]  # (B, Nt, D)
-        joint_grads  = grads[:, j0:j1, :]                 # (B, Nt, D)
-        scores = jnp.sum(joint_tokens * joint_grads, axis=-1)  # (B, Nt)
+        # joint_tokens = prefix_emb_unaligned[:, j0:j1, :]
+        # joint_grads  = grads[:, j0:j1, :]
+        # joint_scores = jnp.sum(joint_tokens * joint_grads, axis=-1)  # (B, S_text)
 
-        # Slice prompt tokens to joint span (after task tokens)
-        joint_token_ids = observation.tokenized_prompt[:, task_token_len:]
+        # text_seq_len = joint_scores.shape[1]
+        # positions = jnp.arange(text_seq_len)[None, :]
+        # joint_span_mask = positions >= observation.task_token_len[..., None]
 
-        # mask padding tokens (keep raw; no normalization here)
-        joint_token_mask = None
-        if observation.tokenized_prompt_mask is not None:
-            joint_token_mask = observation.tokenized_prompt_mask[:, task_token_len:]
-            scores = scores * joint_token_mask.astype(scores.dtype)
+        # joint_token_ids = observation.tokenized_prompt
+        # joint_token_mask = joint_span_mask
+        # if observation.tokenized_prompt_mask is not None:
+        #     joint_token_mask = joint_token_mask & observation.tokenized_prompt_mask
+        #     joint_scores = joint_scores * joint_token_mask.astype(joint_scores.dtype)
 
-        debug["attr"]["joints"] = {
-            "scores": scores,               # (B, Nj)
-            "token_ids": joint_token_ids,   # (B, Nj)
-            "token_mask": joint_token_mask, # (B, Nj)
-        }
+        # debug["attr"]["joints"] = {
+        #     "scores": joint_scores,
+        #     "token_ids": joint_token_ids,
+        #     "token_mask": joint_token_mask,
+        # }
         
         
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
