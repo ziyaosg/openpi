@@ -526,37 +526,27 @@ class Pi0FAST(_model.BaseModel):
             "task_piece_end": observation.task_piece_end[:task_token_len],
         }
 
-        # jax.debug.print("task_piece_id: {}", observation.task_piece_id[:task_token_len])
-        # jax.debug.print("task_piece_begin: {}", observation.task_piece_begin[:task_token_len])
-        # jax.debug.print("task_piece_end: {}", observation.task_piece_end[:task_token_len])
-        # jax.debug.print("task token ids: {}", task_token_ids)
-        # jax.debug.print("task token mask: {}", task_token_mask)
-        # jax.debug.print("task scores: {}", task_scores)
-
         # -----------------------
         # Joint attribution (per token)
         # -----------------------
-        # j0, j1 = spans["joints"]
+        j0, j1 = spans["joints"]
 
-        # joint_tokens = prefix_emb_unaligned[:, j0:j1, :]
-        # joint_grads  = grads[:, j0:j1, :]
-        # joint_scores = jnp.sum(joint_tokens * joint_grads, axis=-1)  # (B, S_text)
+        joint_tokens = prefix_emb_unaligned[:, j0:j1, :]
+        joint_grads  = grads[:, j0:j1, :]
+        joint_scores = jnp.sum(joint_tokens * joint_grads, axis=-1)
 
-        # text_seq_len = joint_scores.shape[1]
-        # positions = jnp.arange(text_seq_len)[None, :]
-        # joint_span_mask = positions >= observation.task_token_len[..., None]
+        joint_token_ids = observation.tokenized_prompt[:, task_token_len:]
 
-        # joint_token_ids = observation.tokenized_prompt
-        # joint_token_mask = joint_span_mask
-        # if observation.tokenized_prompt_mask is not None:
-        #     joint_token_mask = joint_token_mask & observation.tokenized_prompt_mask
-        #     joint_scores = joint_scores * joint_token_mask.astype(joint_scores.dtype)
+        joint_token_mask = None
+        if observation.tokenized_prompt_mask is not None:
+            joint_token_mask = observation.tokenized_prompt_mask[:, task_token_len:]
+            joint_scores = joint_scores * joint_token_mask.astype(joint_scores.dtype)
 
-        # debug["attr"]["joints"] = {
-        #     "scores": joint_scores,
-        #     "token_ids": joint_token_ids,
-        #     "token_mask": joint_token_mask,
-        # }
+        debug["attr"]["joints"] = {
+            "scores": joint_scores,
+            "token_ids": joint_token_ids,
+            "token_mask": joint_token_mask,
+        }
         
         
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
