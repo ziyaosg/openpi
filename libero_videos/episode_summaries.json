@@ -4,79 +4,799 @@
     "task_id": 0,
     "task": "put both the alphabet soup and the tomato sauce in the basket",
     "start_idx": 0,
-    "end_idx": 53,
+    "end_idx": 56,
     "success": true
+  },
+  {
+    "episode_num": 1,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 57,
+    "end_idx": 106,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 107,
+    "end_idx": 159,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 160,
+    "end_idx": 213,
+    "success": true
+  },
+  {
+    "episode_num": 4,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 214,
+    "end_idx": 273,
+    "success": true
+  },
+  {
+    "episode_num": 5,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 274,
+    "end_idx": 327,
+    "success": true
+  },
+  {
+    "episode_num": 6,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 328,
+    "end_idx": 377,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 378,
+    "end_idx": 423,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 424,
+    "end_idx": 478,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 0,
+    "task": "put both the alphabet soup and the tomato sauce in the basket",
+    "start_idx": 479,
+    "end_idx": 582,
+    "success": false
   },
   {
     "episode_num": 0,
     "task_id": 1,
     "task": "put both the cream cheese box and the butter in the basket",
-    "start_idx": 54,
-    "end_idx": 103,
+    "start_idx": 583,
+    "end_idx": 633,
+    "success": true
+  },
+  {
+    "episode_num": 1,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 634,
+    "end_idx": 683,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 684,
+    "end_idx": 729,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 730,
+    "end_idx": 777,
+    "success": true
+  },
+  {
+    "episode_num": 4,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 778,
+    "end_idx": 828,
+    "success": true
+  },
+  {
+    "episode_num": 5,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 829,
+    "end_idx": 876,
+    "success": true
+  },
+  {
+    "episode_num": 6,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 877,
+    "end_idx": 927,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 928,
+    "end_idx": 976,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 977,
+    "end_idx": 1025,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 1,
+    "task": "put both the cream cheese box and the butter in the basket",
+    "start_idx": 1026,
+    "end_idx": 1073,
     "success": true
   },
   {
     "episode_num": 0,
     "task_id": 2,
     "task": "turn on the stove and put the moka pot on it",
-    "start_idx": 104,
-    "end_idx": 146,
+    "start_idx": 1074,
+    "end_idx": 1177,
+    "success": false
+  },
+  {
+    "episode_num": 1,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1178,
+    "end_idx": 1220,
     "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1221,
+    "end_idx": 1272,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1273,
+    "end_idx": 1376,
+    "success": false
+  },
+  {
+    "episode_num": 4,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1377,
+    "end_idx": 1480,
+    "success": false
+  },
+  {
+    "episode_num": 5,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1481,
+    "end_idx": 1584,
+    "success": false
+  },
+  {
+    "episode_num": 6,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1585,
+    "end_idx": 1688,
+    "success": false
+  },
+  {
+    "episode_num": 7,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1689,
+    "end_idx": 1738,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1739,
+    "end_idx": 1788,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 2,
+    "task": "turn on the stove and put the moka pot on it",
+    "start_idx": 1789,
+    "end_idx": 1892,
+    "success": false
   },
   {
     "episode_num": 0,
     "task_id": 3,
     "task": "put the black bowl in the bottom drawer of the cabinet and close it",
-    "start_idx": 147,
-    "end_idx": 250,
+    "start_idx": 1893,
+    "end_idx": 1996,
+    "success": false
+  },
+  {
+    "episode_num": 1,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 1997,
+    "end_idx": 2100,
+    "success": false
+  },
+  {
+    "episode_num": 2,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2101,
+    "end_idx": 2204,
+    "success": false
+  },
+  {
+    "episode_num": 3,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2205,
+    "end_idx": 2308,
+    "success": false
+  },
+  {
+    "episode_num": 4,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2309,
+    "end_idx": 2412,
+    "success": false
+  },
+  {
+    "episode_num": 5,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2413,
+    "end_idx": 2516,
+    "success": false
+  },
+  {
+    "episode_num": 6,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2517,
+    "end_idx": 2560,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2561,
+    "end_idx": 2664,
+    "success": false
+  },
+  {
+    "episode_num": 8,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2665,
+    "end_idx": 2768,
+    "success": false
+  },
+  {
+    "episode_num": 9,
+    "task_id": 3,
+    "task": "put the black bowl in the bottom drawer of the cabinet and close it",
+    "start_idx": 2769,
+    "end_idx": 2872,
     "success": false
   },
   {
     "episode_num": 0,
     "task_id": 4,
     "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
-    "start_idx": 251,
-    "end_idx": 298,
+    "start_idx": 2873,
+    "end_idx": 2921,
+    "success": true
+  },
+  {
+    "episode_num": 1,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 2922,
+    "end_idx": 2964,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 2965,
+    "end_idx": 3009,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3010,
+    "end_idx": 3056,
+    "success": true
+  },
+  {
+    "episode_num": 4,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3057,
+    "end_idx": 3102,
+    "success": true
+  },
+  {
+    "episode_num": 5,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3103,
+    "end_idx": 3148,
+    "success": true
+  },
+  {
+    "episode_num": 6,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3149,
+    "end_idx": 3195,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3196,
+    "end_idx": 3245,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3246,
+    "end_idx": 3289,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 4,
+    "task": "put the white mug on the left plate and put the yellow and white mug on the right plate",
+    "start_idx": 3290,
+    "end_idx": 3335,
     "success": true
   },
   {
     "episode_num": 0,
     "task_id": 5,
     "task": "pick up the book and place it in the back compartment of the caddy",
-    "start_idx": 299,
-    "end_idx": 332,
+    "start_idx": 3336,
+    "end_idx": 3439,
+    "success": false
+  },
+  {
+    "episode_num": 1,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3440,
+    "end_idx": 3474,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3475,
+    "end_idx": 3504,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3505,
+    "end_idx": 3608,
+    "success": false
+  },
+  {
+    "episode_num": 4,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3609,
+    "end_idx": 3712,
+    "success": false
+  },
+  {
+    "episode_num": 5,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3713,
+    "end_idx": 3816,
+    "success": false
+  },
+  {
+    "episode_num": 6,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3817,
+    "end_idx": 3920,
+    "success": false
+  },
+  {
+    "episode_num": 7,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3921,
+    "end_idx": 3951,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3952,
+    "end_idx": 3983,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 5,
+    "task": "pick up the book and place it in the back compartment of the caddy",
+    "start_idx": 3984,
+    "end_idx": 4030,
     "success": true
   },
   {
     "episode_num": 0,
     "task_id": 6,
     "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
-    "start_idx": 333,
-    "end_idx": 374,
+    "start_idx": 4031,
+    "end_idx": 4070,
+    "success": true
+  },
+  {
+    "episode_num": 1,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4071,
+    "end_idx": 4113,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4114,
+    "end_idx": 4158,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4159,
+    "end_idx": 4215,
+    "success": true
+  },
+  {
+    "episode_num": 4,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4216,
+    "end_idx": 4259,
+    "success": true
+  },
+  {
+    "episode_num": 5,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4260,
+    "end_idx": 4303,
+    "success": true
+  },
+  {
+    "episode_num": 6,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4304,
+    "end_idx": 4361,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4362,
+    "end_idx": 4410,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4411,
+    "end_idx": 4454,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 6,
+    "task": "put the white mug on the plate and put the chocolate pudding to the right of the plate",
+    "start_idx": 4455,
+    "end_idx": 4499,
     "success": true
   },
   {
     "episode_num": 0,
     "task_id": 7,
     "task": "put both the alphabet soup and the cream cheese box in the basket",
-    "start_idx": 375,
-    "end_idx": 428,
+    "start_idx": 4500,
+    "end_idx": 4551,
+    "success": true
+  },
+  {
+    "episode_num": 1,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4552,
+    "end_idx": 4602,
+    "success": true
+  },
+  {
+    "episode_num": 2,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4603,
+    "end_idx": 4653,
+    "success": true
+  },
+  {
+    "episode_num": 3,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4654,
+    "end_idx": 4709,
+    "success": true
+  },
+  {
+    "episode_num": 4,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4710,
+    "end_idx": 4779,
+    "success": true
+  },
+  {
+    "episode_num": 5,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4780,
+    "end_idx": 4833,
+    "success": true
+  },
+  {
+    "episode_num": 6,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4834,
+    "end_idx": 4886,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4887,
+    "end_idx": 4933,
+    "success": true
+  },
+  {
+    "episode_num": 8,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4934,
+    "end_idx": 4986,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 7,
+    "task": "put both the alphabet soup and the cream cheese box in the basket",
+    "start_idx": 4987,
+    "end_idx": 5035,
     "success": true
   },
   {
     "episode_num": 0,
     "task_id": 8,
     "task": "put both moka pots on the stove",
-    "start_idx": 429,
-    "end_idx": 532,
+    "start_idx": 5036,
+    "end_idx": 5139,
+    "success": false
+  },
+  {
+    "episode_num": 1,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5140,
+    "end_idx": 5243,
+    "success": false
+  },
+  {
+    "episode_num": 2,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5244,
+    "end_idx": 5347,
+    "success": false
+  },
+  {
+    "episode_num": 3,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5348,
+    "end_idx": 5451,
+    "success": false
+  },
+  {
+    "episode_num": 4,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5452,
+    "end_idx": 5555,
+    "success": false
+  },
+  {
+    "episode_num": 5,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5556,
+    "end_idx": 5659,
+    "success": false
+  },
+  {
+    "episode_num": 6,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5660,
+    "end_idx": 5763,
+    "success": false
+  },
+  {
+    "episode_num": 7,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5764,
+    "end_idx": 5867,
+    "success": false
+  },
+  {
+    "episode_num": 8,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5868,
+    "end_idx": 5971,
+    "success": false
+  },
+  {
+    "episode_num": 9,
+    "task_id": 8,
+    "task": "put both moka pots on the stove",
+    "start_idx": 5972,
+    "end_idx": 6075,
     "success": false
   },
   {
     "episode_num": 0,
     "task_id": 9,
     "task": "put the yellow and white mug in the microwave and close it",
-    "start_idx": 533,
-    "end_idx": 636,
+    "start_idx": 6076,
+    "end_idx": 6179,
+    "success": false
+  },
+  {
+    "episode_num": 1,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6180,
+    "end_idx": 6283,
+    "success": false
+  },
+  {
+    "episode_num": 2,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6284,
+    "end_idx": 6387,
+    "success": false
+  },
+  {
+    "episode_num": 3,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6388,
+    "end_idx": 6491,
+    "success": false
+  },
+  {
+    "episode_num": 4,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6492,
+    "end_idx": 6595,
+    "success": false
+  },
+  {
+    "episode_num": 5,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6596,
+    "end_idx": 6699,
+    "success": false
+  },
+  {
+    "episode_num": 6,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6700,
+    "end_idx": 6767,
+    "success": true
+  },
+  {
+    "episode_num": 7,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6768,
+    "end_idx": 6871,
+    "success": false
+  },
+  {
+    "episode_num": 8,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6872,
+    "end_idx": 6923,
+    "success": true
+  },
+  {
+    "episode_num": 9,
+    "task_id": 9,
+    "task": "put the yellow and white mug in the microwave and close it",
+    "start_idx": 6924,
+    "end_idx": 7027,
     "success": false
   }
 ]

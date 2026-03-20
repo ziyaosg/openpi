@@ -1,14 +1,22 @@
-import numpy as np
-import matplotlib.pyplot as plt
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
 import os
 import re
 import glob
+from dataclasses import dataclass
 from pathlib import Path
+from typing import List
+
+import numpy as np
+import matplotlib.pyplot as plt
 import sentencepiece
 import openpi.shared.download as download
 
-INPUT_DIR = "/data/ann/policy_records_20260309_215220"
-OUTPUT_DIR = "/data/ann/policy_records_20260309_215220/task_heatmaps"
+INPUT_DIR = "/data/ann/policy_records_20260317_194622"
+OUTPUT_DIR = "/data/ann/policy_records_20260317_194622/task_heatmaps"
+EPISODE_SUMMARIES_JSON = "/home/annsong/Desktop/openpi/libero_videos/episode_summaries.json"
 
 TASK_KEYS = [
     "outputs/debug/attr/task/scores",
@@ -17,7 +25,63 @@ TASK_KEYS = [
     "outputs/debug/attr/task/task_piece_id",
 ]
 
-# Load tokenizer
+
+@dataclass(frozen=True)
+class EpisodeInfo:
+    task_id: int
+    task: str
+    episode_num: int
+    success: bool
+    start_idx: int
+    end_idx: int
+
+
+def load_episode_infos(path: str) -> List[EpisodeInfo]:
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    infos: List[EpisodeInfo] = []
+    for d in data:
+        infos.append(
+            EpisodeInfo(
+                task_id=int(d["task_id"]),
+                task=str(d["task"]),
+                episode_num=int(d["episode_num"]),
+                success=bool(d["success"]),
+                start_idx=int(d["start_idx"]),
+                end_idx=int(d["end_idx"]),
+            )
+        )
+    return infos
+
+
+def episode_for_step(step: int, episodes: List[EpisodeInfo]) -> EpisodeInfo:
+    """
+    Find the episode whose [start_idx, end_idx] contains step.
+    Assumes end_idx is inclusive.
+    """
+    for ep in episodes:
+        if ep.start_idx <= step <= ep.end_idx:
+            return ep
+    raise KeyError(f"Step {step} not covered by any episode range in {EPISODE_SUMMARIES_JSON}")
+
+
+def slugify(s: str, max_len: int = 120) -> str:
+    """
+    Folder-safe slug:
+      - lowercase
+      - replace non-alnum with underscores
+      - collapse repeats
+      - trim length
+    """
+    s = s.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    if len(s) > max_len:
+        s = s[:max_len].rstrip("_")
+    return s
+
+
 path = download.maybe_download(
     "gs://big_vision/paligemma_tokenizer.model",
     gs={"token": "anon"},
@@ -112,17 +176,21 @@ def process_one(npy_path: str, out_png: str) -> None:
     ax.set_ylim(0, 1)
     ax.axis("off")
 
+    Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def main() -> None:
     """
-    Iterate over all step_*.npy files and write a corresponding PNG for each.
+    Iterate over all step_*.npy files and write a corresponding PNG for each,
+    grouped into nested folders by task and episode.
     """
     in_dir = Path(INPUT_DIR)
     out_dir = Path(OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
     files = sorted(glob.glob(str(in_dir / "step_*.npy")), key=step_index)
     if not files:
@@ -130,7 +198,12 @@ def main() -> None:
 
     for f in files:
         s = step_index(f)
-        out_png = str(out_dir / f"step_{s:06d}.png")
+
+        ep = episode_for_step(s, episodes)
+        task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
+        ep_folder = f"ep{ep.episode_num}_{str(ep.success).lower()}"
+
+        out_png = str(out_dir / task_folder / ep_folder / f"step_{s:06d}.png")
         process_one(f, out_png)
         print(f"[OK] {out_png}")
 
