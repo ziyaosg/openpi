@@ -14,15 +14,15 @@ import matplotlib.pyplot as plt
 import sentencepiece
 import openpi.shared.download as download
 
-INPUT_DIR = "/data/ann/policy_records_20260317_194622"
-OUTPUT_DIR = "/data/ann/policy_records_20260317_194622/task_heatmaps"
+INPUT_DIR = "/data/ann/policy_records_20260323_083752/"
+OUTPUT_DIR = "/data/ann/policy_records_20260323_083752/state_heatmaps"
 EPISODE_SUMMARIES_JSON = "/home/annsong/Desktop/openpi/libero_videos/episode_summaries.json"
 
 TASK_KEYS = [
-    "outputs/debug/attr/task/scores",
-    "outputs/debug/attr/task/task_piece_begin",
-    "outputs/debug/attr/task/task_piece_end",
-    "outputs/debug/attr/task/task_piece_id",
+    "outputs/debug/attr/state/scores",
+    "outputs/debug/attr/state/state_piece_begin",
+    "outputs/debug/attr/state/state_piece_end",
+    "outputs/debug/attr/state/state_piece_id",
 ]
 
 

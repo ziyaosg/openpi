@@ -99,6 +99,7 @@ class Pi0FASTConfig(_model.BaseModelConfig):
     def create(self, rng: at.KeyArrayLike) -> "Pi0FAST":
         return Pi0FAST(self, rngs=nnx.Rngs(rng))
 
+
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
         image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
@@ -119,16 +120,26 @@ class Pi0FASTConfig(_model.BaseModelConfig):
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+
                 task_token_len=jax.ShapeDtypeStruct([], jnp.int32),
+                state_token_len=jax.ShapeDtypeStruct([], jnp.int32),
+
                 task_piece_id=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
                 task_piece_begin=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
                 task_piece_end=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+
+                
+                state_piece_id=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+                state_piece_begin=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+                state_piece_end=jax.ShapeDtypeStruct([self.max_token_len], jnp.int32),
+
                 token_ar_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.bool_),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 
         return observation_spec, action_spec
+
 
     def get_freeze_filter(self) -> nnx.filterlib.Filter:
         """Returns the freeze filter based on the model config."""
@@ -139,8 +150,8 @@ class Pi0FASTConfig(_model.BaseModelConfig):
 
 @dataclasses.dataclass
 class Modality:
-    name: str # "img/front", "text", "joints"
-    type: str # "image", "text", "joints"
+    name: str # "img/front", "text", "state"
+    type: str # "image", "text", "state"
     embedding: at.Array # (B, S, D)
     input_mask: at.Array # (B, S)
     ar_mask: at.Array # (B, S)
@@ -280,17 +291,22 @@ class Pi0FAST(_model.BaseModel):
             meta={}
         )
 
-    def build_joint_modality(self, obs: _model.Observation, text_modality: Modality):
-        assert obs.task_token_len is not None, "task_token_len is required"
-        task_token_len = obs.task_token_len
+    def build_state_modality(
+        self,
+        obs: _model.Observation,
+        text_modality: Modality,
+    ) -> Modality:
+        task_len = obs.task_token_len
+        state_len = obs.state_token_len
+        end = task_len + state_len
 
         return Modality(
-            name="joints",
+            name="state",
             type="text",
-            embedding=text_modality.embedding[:, task_token_len:, :],
-            input_mask=text_modality.input_mask[:, task_token_len:],
-            ar_mask=text_modality.ar_mask[:, task_token_len:],
-            meta={}
+            embedding=text_modality.embedding[:, task_len:end, :],
+            input_mask=text_modality.input_mask[:, task_len:end],
+            ar_mask=text_modality.ar_mask[:, task_len:end],
+            meta={},
         )
 
     def compute_modality_grads(
@@ -345,9 +361,9 @@ class Pi0FAST(_model.BaseModel):
         full_text_modality = self.build_full_text_modality(obs)
 
         task_modality = self.build_task_modality(obs, full_text_modality) # Name is 'task'
-        joint_modality = self.build_joint_modality(obs, full_text_modality) # Name is 'joints'
+        state_modality = self.build_state_modality(obs, full_text_modality) # Name is 'state'
 
-        modalities = image_modality + [task_modality, joint_modality]
+        modalities = image_modality + [task_modality, state_modality]
 
         # modalities = image_modality + [full_text_modality]
 
@@ -368,7 +384,7 @@ class Pi0FAST(_model.BaseModel):
             if m.type == "image":
                 spans["image"][m.name] = (start, end)
             else:
-                # Possible m.name: "task" and "joints"
+                # Possible m.name: "task" and "state"
                 spans[m.name] = (start, end)
 
             # Image grids
@@ -480,7 +496,7 @@ class Pi0FAST(_model.BaseModel):
             target_token=target_token,
         )  # (B,S,D)
 
-        # collect attributions into a single debug payload
+                # collect attributions into a single debug payload
         debug = {"attr": {}, "spans": spans, "meta": meta}
 
         # -----------------------
@@ -488,33 +504,41 @@ class Pi0FAST(_model.BaseModel):
         # -----------------------
         image_attr = {}
         for cam_name, (s0, s1) in spans["image"].items():
-            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]     # This is A; (B, Np, D)
-            patch_grads  = grads[:, s0:s1, :]                    # Slicing for only the image part; this is dy/dA; (B, Np, D)
-            grid_hw = meta["image_grids"][cam_name]              # Np = Hp*Wp; (Hp, Wp)
+            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]     # (B, Np, D)
+            patch_grads  = grads[:, s0:s1, :]                    # (B, Np, D)
+            grid_hw = meta["image_grids"][cam_name]              # (Hp, Wp)
 
             image_attr[cam_name] = gradcam_from_patch_tokens(
                 patch_tokens,
                 patch_grads,
                 grid_hw,
-                relu=True          # keep only positive influence (per classic Grad-CAM)
+                relu=True,
             )
         debug["attr"]["image"] = image_attr
+
+        # normalize token lengths to Python ints for slicing
+        task_token_len = observation.task_token_len
+        state_token_len = observation.state_token_len
+
+        task_start = 0
+        task_end = task_token_len
+        state_start = task_end
+        state_end = state_start + state_token_len
 
         # -----------------------
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
-        task_token_len = observation.task_token_len
 
         task_tokens = prefix_emb_unaligned[:, t0:t1, :]   # (B, Nt, D)
         task_grads  = grads[:, t0:t1, :]                  # (B, Nt, D)
         task_scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
 
-        task_token_ids = observation.tokenized_prompt[:, :task_token_len]
+        task_token_ids = observation.tokenized_prompt[:, task_start:task_end]
 
         task_token_mask = None
         if observation.tokenized_prompt_mask is not None:
-            task_token_mask = observation.tokenized_prompt_mask[:, :task_token_len]
+            task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
             task_scores = task_scores * task_token_mask.astype(task_scores.dtype)
 
         debug["attr"]["task"] = {
@@ -527,25 +551,28 @@ class Pi0FAST(_model.BaseModel):
         }
 
         # -----------------------
-        # Joint attribution (per token)
+        # State attribution (per token)
         # -----------------------
-        j0, j1 = spans["joints"]
+        s0, s1 = spans["state"]
 
-        joint_tokens = prefix_emb_unaligned[:, j0:j1, :]
-        joint_grads  = grads[:, j0:j1, :]
-        joint_scores = jnp.sum(joint_tokens * joint_grads, axis=-1)
+        state_tokens = prefix_emb_unaligned[:, s0:s1, :]
+        state_grads  = grads[:, s0:s1, :]
+        state_scores = jnp.sum(state_tokens * state_grads, axis=-1)
 
-        joint_token_ids = observation.tokenized_prompt[:, task_token_len:]
+        state_token_ids = observation.tokenized_prompt[:, state_start:state_end]
 
-        joint_token_mask = None
+        state_token_mask = None
         if observation.tokenized_prompt_mask is not None:
-            joint_token_mask = observation.tokenized_prompt_mask[:, task_token_len:]
-            joint_scores = joint_scores * joint_token_mask.astype(joint_scores.dtype)
+            state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
+            state_scores = state_scores * state_token_mask.astype(state_scores.dtype)
 
-        debug["attr"]["joints"] = {
-            "scores": joint_scores,
-            "token_ids": joint_token_ids,
-            "token_mask": joint_token_mask,
+        debug["attr"]["state"] = {
+            "scores": state_scores,
+            "token_ids": state_token_ids,
+            "token_mask": state_token_mask,
+            "state_piece_id": observation.state_piece_id[:state_token_len],
+            "state_piece_begin": observation.state_piece_begin[:state_token_len],
+            "state_piece_end": observation.state_piece_end[:state_token_len],
         }
         
         

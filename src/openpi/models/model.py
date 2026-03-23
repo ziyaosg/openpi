@@ -97,11 +97,17 @@ class Observation(Generic[ArrayT]):
 
     # Python scalar, not a pytree leaf.
     task_token_len: int | None = struct.field(pytree_node=False, default=None)
+    state_token_len: int | None = struct.field(pytree_node=False, default=None)
 
     # Task pieces
     task_piece_id: at.Int[ArrayT, "t"] | None = None
     task_piece_begin: at.Int[ArrayT, "t"] | None = None
     task_piece_end: at.Int[ArrayT, "t"] | None = None
+
+    # State pieces
+    state_piece_id: at.Int[ArrayT, "t"] | None = None
+    state_piece_begin: at.Int[ArrayT, "t"] | None = None
+    state_piece_end: at.Int[ArrayT, "t"] | None = None
 
     # pi0-fast model specific fields.
     token_ar_mask: at.Int[ArrayT, "*b l"] | None = None
@@ -123,6 +129,11 @@ class Observation(Generic[ArrayT]):
         task_piece_begin = data.get("task_piece_begin")
         task_piece_end = data.get("task_piece_end")
 
+        state_token_len = data.get("state_token_len")
+        state_piece_id = data.get("state_piece_id")
+        state_piece_begin = data.get("state_piece_begin")
+        state_piece_end = data.get("state_piece_end")
+
         # Convert task_token_len into a true Python scalar.
         if task_token_len is not None:
             arr = np.asarray(task_token_len)
@@ -133,6 +144,18 @@ class Observation(Generic[ArrayT]):
             else:
                 raise ValueError(
                     f"task_token_len must be scalar or shape (1,), got shape {arr.shape}"
+                )
+
+        # Convert state_token_len into a true Python scalar.
+        if state_token_len is not None:
+            arr = np.asarray(state_token_len)
+            if arr.ndim == 0:
+                state_token_len = int(arr.item())
+            elif arr.ndim == 1 and arr.shape[0] == 1:
+                state_token_len = int(arr[0].item())
+            else:
+                raise ValueError(
+                    f"state_token_len must be scalar or shape (1,), got shape {arr.shape}"
                 )
 
         # Squeeze batch dim for task piece arrays if present as (1, T).
@@ -151,6 +174,23 @@ class Observation(Generic[ArrayT]):
             if task_piece_end.ndim == 2 and task_piece_end.shape[0] == 1:
                 task_piece_end = task_piece_end[0]
 
+        # Squeeze batch dim for state piece arrays if present as (1, T).
+        if state_piece_id is not None:
+            state_piece_id = jnp.asarray(state_piece_id)
+            if state_piece_id.ndim == 2 and state_piece_id.shape[0] == 1:
+                state_piece_id = state_piece_id[0]
+
+        if state_piece_begin is not None:
+            state_piece_begin = jnp.asarray(state_piece_begin)
+            if state_piece_begin.ndim == 2 and state_piece_begin.shape[0] == 1:
+                state_piece_begin = state_piece_begin[0]
+
+        if state_piece_end is not None:
+            state_piece_end = jnp.asarray(state_piece_end)
+            if state_piece_end.ndim == 2 and state_piece_end.shape[0] == 1:
+                state_piece_end = state_piece_end[0]
+
+
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
@@ -158,9 +198,13 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             task_token_len=task_token_len,
+            state_token_len=state_token_len,
             task_piece_id=task_piece_id,
             task_piece_begin=task_piece_begin,
             task_piece_end=task_piece_end,
+            state_piece_id=state_piece_id,
+            state_piece_begin=state_piece_begin,
+            state_piece_end=state_piece_end,
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
         )
@@ -244,6 +288,10 @@ def preprocess_observation(
         task_piece_id=observation.task_piece_id,
         task_piece_begin=observation.task_piece_begin,
         task_piece_end=observation.task_piece_end,
+        state_token_len=observation.state_token_len,
+        state_piece_id=observation.state_piece_id,
+        state_piece_begin=observation.state_piece_begin,
+        state_piece_end=observation.state_piece_end,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
     )

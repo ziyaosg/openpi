@@ -270,10 +270,16 @@ class TokenizeFASTInputs(DataTransformFn):
             ar_mask,
             loss_mask,
             task_len,
+            state_len,
             task_piece_id,
             task_piece_begin,
             task_piece_end,
+            state_piece_id,
+            state_piece_begin,
+            state_piece_end,
         ) = self.tokenizer.tokenize(prompt, state, actions)
+
+        print(f"State token len: {state_len}, task token len: {task_len}")
 
         return {
             **data,
@@ -282,9 +288,13 @@ class TokenizeFASTInputs(DataTransformFn):
             "token_ar_mask": ar_mask,
             "token_loss_mask": loss_mask,
             "task_token_len": int(task_len),         # scalar
+            "state_token_len": int(state_len),       # scalar
             "task_piece_id": np.asarray(task_piece_id, dtype=np.int32),       # (t,)
             "task_piece_begin": np.asarray(task_piece_begin, dtype=np.int32), # (t,)
             "task_piece_end": np.asarray(task_piece_end, dtype=np.int32),     # (t,)
+            "state_piece_id": np.asarray(state_piece_id, dtype=np.int32),     # (s,)
+            "state_piece_begin": np.asarray(state_piece_begin, dtype=np.int32), # (s,)
+            "state_piece_end": np.asarray(state_piece_end, dtype=np.int32),   # (s,)
         }
 
 
