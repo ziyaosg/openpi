@@ -353,6 +353,76 @@ class Pi0FAST(_model.BaseModel):
         grads_all = jax.grad(score_fn)(prefix_emb_unaligned)  # (B,S,D)
         return grads_all
 
+    def pack_action_attention_debug(
+        self,
+        attn_row_mean,
+        spans,
+        meta,
+        observation,
+        *,
+        target_layer: int,
+    ):
+        """
+        Package raw attention of the first decoded action token into modality-wise
+        outputs for visualization.
+
+        Args:
+            attn_row_mean:
+                [B, S] attention over all prefix key positions, already averaged
+                across all heads.
+            spans:
+                modality spans produced by embed_inputs_with_spans(...)
+            meta:
+                metadata dict, including image patch grids
+            observation:
+                current observation, used to recover token ids
+            target_layer:
+                which transformer layer this attention came from
+
+        Returns:
+            Nested debug dict with image/task/state attention scores.
+        """
+        debug = {
+            "target_layer": int(target_layer),
+            "image": {},
+            "task": {},
+            "state": {},
+        }
+
+        # -----------------------
+        # Image attention
+        # -----------------------
+        # Keep all patch scores for each image modality. The renderer can later
+        # reshape them into (Hp, Wp) heatmaps using the stored grid.
+        for cam_name, (s0, s1) in spans["image"].items():
+            debug["image"][cam_name] = {
+                "scores": attn_row_mean[:, s0:s1],          # [B, Npatch]
+                "grid": meta["image_grids"][cam_name],      # (Hp, Wp)
+            }
+
+        # -----------------------
+        # Task attention
+        # -----------------------
+        t0, t1 = spans["task"]
+        task_len = observation.task_token_len
+        debug["task"] = {
+            "scores": attn_row_mean[:, t0:t1],              # [B, Ntask]
+            "token_ids": observation.tokenized_prompt[:, :task_len],
+        }
+
+        # -----------------------
+        # State attention
+        # -----------------------
+        s0, s1 = spans["state"]
+        task_len = observation.task_token_len
+        state_len = observation.state_token_len
+        debug["state"] = {
+            "scores": attn_row_mean[:, s0:s1],              # [B, Nstate]
+            "token_ids": observation.tokenized_prompt[:, task_len:task_len + state_len],
+        }
+
+        return debug
+
     @at.typecheck
     def embed_inputs_with_spans(self, obs: _model.Observation):
         token_embeddings, input_masks, ar_masks = [], [], []
@@ -469,8 +539,16 @@ class Pi0FAST(_model.BaseModel):
         # pad attention mask to set the size of the KV cache (prefill_size + max_decoding_steps)
         prefix_attn_mask_aligned = jnp.pad(prefix_attn_mask_aligned, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask_aligned, axis=-1) - 1
-        prefix_logits, kv_cache, _ = self.PaliGemma.llm(
-            embedded_prefix=prefix_emb_aligned, mask=prefix_attn_mask_aligned, positions=prefix_positions, decode=True
+
+        # Prefix prefill pass.
+        # The final prefix logit predicts the FIRST decoded action token.
+        # We also collect raw attention rows from all transformer layers inside
+        # gemma_fast.Module, and later select one later layer.
+        prefix_logits, kv_cache, llm_out = self.PaliGemma.llm(
+            embedded_prefix=prefix_emb_aligned,
+            mask=prefix_attn_mask_aligned,
+            positions=prefix_positions,
+            decode=True,
         )
 
         # prepare decoding -- final logit decodes the first token
@@ -482,6 +560,21 @@ class Pi0FAST(_model.BaseModel):
 
         # debug dict containing attributions.
         debug = None
+
+        # Raw-attention debug for the same first decoded action token.
+        raw_attn_debug = None
+        if llm_out is not None and "attn_row_target_layer" in llm_out:
+            # attn_row_target_layer has shape [B, H, S].
+            # We simplify by average-pooling across all heads.
+            attn_row_mean = jnp.mean(llm_out["attn_row_target_layer"], axis=1)  # [B, S]
+
+            raw_attn_debug = self.pack_action_attention_debug(
+                attn_row_mean,
+                spans,
+                meta,
+                observation,
+                target_layer=llm_out["attn_target_layer_index"],
+            )
 
         # choose the target token for the FIRST decoded token (step 0)
         # use greedy choice to make attribution deterministic
@@ -496,8 +589,12 @@ class Pi0FAST(_model.BaseModel):
             target_token=target_token,
         )  # (B,S,D)
 
-                # collect attributions into a single debug payload
+        # collect attributions into a single debug payload
         debug = {"attr": {}, "spans": spans, "meta": meta}
+
+        # Add raw attention visualization payload if available.
+        if raw_attn_debug is not None:
+            debug["raw_attn"] = raw_attn_debug
 
         # -----------------------
         # Image Grad-CAM (per view)

@@ -217,11 +217,30 @@ class Attention(nn.Module):
         big_neg = -2.3819763e38  # See gemma/modules.py
         masked_logits = jnp.where(attn_mask[:, :, None, :, :], logits, big_neg)
 
+        # probs has shape [B, K, G, T, S]
+        # B = batch
+        # K = num_kv_heads
+        # G = groups per kv head (so total heads = K * G)
+        # T = query length
+        # S = key length
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
+        # Weighted sum over values -> standard attention output
         encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
         encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
-        return self.attn_vec_einsum("BTNH,NHD->BTD", encoded), kv_cache
+
+        attn_output = self.attn_vec_einsum("BTNH,NHD->BTD", encoded)
+
+        # Reformat attention to [B, H, T, S] so the head axis is explicit.
+        probs_full = einops.rearrange(probs, "B K G T S -> B (K G) T S")
+
+        # Always collect the LAST query row.
+        # In the prefix prefill call, this row is the one whose logit predicts
+        # the first decoded action token.
+        attn_last_row = probs_full[:, :, -1, :]   # [B, H, S]
+
+        # return self.attn_vec_einsum("BTNH,NHD->BTD", encoded), kv_cache
+        return attn_output, kv_cache, attn_last_row
 
 
 @at.typecheck
@@ -259,17 +278,33 @@ class Block(nn.Module):
             self.drop = lambda x, _: x
 
     def __call__(self, x, kv_cache, positions, attn_mask, decode, deterministic=True):  # noqa: FBT002
+        # x: [B, T, D] hidden states for this transformer layer
         x = nn.with_logical_constraint(x, ("act_batch", "act_len", "act_emb"))
+
+        # Standard pre-attention normalization
         inputs_normalized = self.pre_attention_norm(x)
-        attn_output, kv_cache = self.attn(inputs_normalized, positions, attn_mask, kv_cache, decode, deterministic)
+
+        # Self-attention now always returns:
+        #   1) transformed hidden states
+        #   2) updated KV cache
+        #   3) raw attention row from the LAST query position, shape [B, H, S]
+        attn_output, kv_cache, attn_last_row = self.attn(
+            inputs_normalized, positions, attn_mask, kv_cache, decode, deterministic
+        )
+
+        # Residual block as before
         attn_output = self.drop(attn_output, deterministic)
         attn_output += x
         residual = attn_output
+
+        # Feed-forward block as before
         attn_output = self.pre_ffw_norm(attn_output)
         outputs = self.mlp(attn_output)
         outputs = self.drop(outputs, deterministic)
         outputs = residual + outputs
-        return outputs, kv_cache
+
+        # Return the usual hidden states + cache, and also the raw attention row
+        return outputs, kv_cache, attn_last_row
 
 
 KVCache: TypeAlias = tuple[at.Int[at.Array, " b"], at.Float[at.Array, "b _t _k _h"], at.Float[at.Array, "b _t _v _h"]]
@@ -401,11 +436,24 @@ class Module(nn.Module):
                 length=self.depth,
             )(parent=layers, **block_kw)
         ]
+
         for block in blocks:
-            x, kv_cache = block(x, kv_cache, positions, mask, decode, deterministic)
+            # Because the model is scanned over depth, attn_rows_all will collect one
+            # [B, H, S] tensor per transformer layer.
+            x, kv_cache, attn_rows_all = block(x, kv_cache, positions, mask, decode, deterministic)
 
         assert x.dtype == jnp.dtype(self.embed_dtype)  # Sanity check.
         out["encoded"] = x
+
+        # Save raw attention rows from all layers.
+        # Expected shape after scan: [L, B, H, S], where L = number of layers.
+        out["attn_row_all_layers"] = attn_rows_all
+
+        # DESIGN CHOICE: Pick one later layer for simplified visualization.
+        # Gemma-2B depth is 18, so layer 15 is a reasonable late-layer choice.
+        target_layer = 15
+        out["attn_target_layer_index"] = target_layer
+        out["attn_row_target_layer"] = attn_rows_all[target_layer]
 
         x = RMSNorm(name="final_norm")(x)
         out["pre_logits"] = x
