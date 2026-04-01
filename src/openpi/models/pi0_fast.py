@@ -542,8 +542,12 @@ class Pi0FAST(_model.BaseModel):
 
         # Run the prefix prefill pass and collect raw attention rows from each
         # transformer layer through Flax's "intermediates" collection.
-        (prefix_logits, kv_cache, llm_out), intermediates = self.PaliGemma.llm.apply(
-            {"params": self.PaliGemma.llm.variables["params"]},
+        #
+        # IMPORTANT:
+        # self.PaliGemma.llm is a ToNNX wrapper, so .apply(...) must be called on the
+        # wrapped Linen module, not on the wrapper itself.
+        (prefix_logits, kv_cache, _), intermediates = self.PaliGemma.llm.module.apply(
+            self.PaliGemma.llm.variables,
             embedded_prefix=prefix_emb_aligned,
             mask=prefix_attn_mask_aligned,
             positions=prefix_positions,
@@ -551,33 +555,33 @@ class Pi0FAST(_model.BaseModel):
             mutable=["intermediates"],
         )
 
-        # attn_row was "sown" inside every transformer block.
-        # After scan, this comes back as one per-layer collection of [B, H, S].
+        # attn_row was stored with self.sow("intermediates", "attn_row", ...)
+        # inside each transformer block.
         attn_rows_all = intermediates["intermediates"]["attn_row"]
 
-        # Normalize the per-layer collection into a stacked array if needed.
+        # Depending on how scan returns intermediates, this may be a tuple/list.
+        # Convert it to one stacked array so layer indexing is consistent.
         if isinstance(attn_rows_all, (tuple, list)):
             attn_rows_all = jnp.stack(attn_rows_all, axis=0)
 
+        # Optional temporary sanity check
+        print("attn_rows_all shape:", getattr(attn_rows_all, "shape", None))
+
         # DESIGN CHOICE:
         # Use one later layer for the first simplified raw-attention visualization.
-        # Gemma-2B depth is 18, so layer 15 is a reasonable late-layer choice.
         RAW_ATTN_TARGET_LAYER = 15
 
-        # Select that layer's attention row.
+        # Select the chosen layer.
         # Expected shape: [B, H, S]
         attn_row_target_layer = attn_rows_all[RAW_ATTN_TARGET_LAYER]
 
         # The final prefix logit predicts the FIRST decoded action token.
         last_logit = prefix_logits[:, -1:]
 
-        # debug dict containing attributions.
-        debug = None
-
         # Raw-attention debug for the same first decoded action token.
         raw_attn_debug = None
         if attn_row_target_layer is not None:
-            # Average-pool across heads for a simpler first visualization.
+            # Average across heads for a simpler first visualization.
             # [B, H, S] -> [B, S]
             attn_row_mean = jnp.mean(attn_row_target_layer, axis=1)
 
@@ -588,7 +592,7 @@ class Pi0FAST(_model.BaseModel):
                 observation,
                 target_layer=RAW_ATTN_TARGET_LAYER,
             )
-        
+
         # choose the target token for the FIRST decoded token (step 0)
         # use greedy choice to make attribution deterministic
         target_token = jnp.argmax(last_logit, axis=-1)  # (B, 1) token id in vocab
