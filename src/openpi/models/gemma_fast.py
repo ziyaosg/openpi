@@ -303,8 +303,14 @@ class Block(nn.Module):
         outputs = self.drop(outputs, deterministic)
         outputs = residual + outputs
 
-        # Return the usual hidden states + cache, and also the raw attention row
-        return outputs, kv_cache, attn_last_row
+        # Save the raw attention row for debugging without changing the scan return signature.
+        # attn_last_row should have shape [B, H, S]:
+        #   B = batch
+        #   H = number of heads
+        #   S = number of key positions
+        self.sow("intermediates", "attn_row", attn_last_row)
+
+        return outputs, kv_cache
 
 
 KVCache: TypeAlias = tuple[at.Int[at.Array, " b"], at.Float[at.Array, "b _t _k _h"], at.Float[at.Array, "b _t _v _h"]]
@@ -440,20 +446,10 @@ class Module(nn.Module):
         for block in blocks:
             # Because the model is scanned over depth, attn_rows_all will collect one
             # [B, H, S] tensor per transformer layer.
-            x, kv_cache, attn_rows_all = block(x, kv_cache, positions, mask, decode, deterministic)
+            x, kv_cache = block(x, kv_cache, positions, mask, decode, deterministic)
 
         assert x.dtype == jnp.dtype(self.embed_dtype)  # Sanity check.
         out["encoded"] = x
-
-        # Save raw attention rows from all layers.
-        # Expected shape after scan: [L, B, H, S], where L = number of layers.
-        out["attn_row_all_layers"] = attn_rows_all
-
-        # DESIGN CHOICE: Pick one later layer for simplified visualization.
-        # Gemma-2B depth is 18, so layer 15 is a reasonable late-layer choice.
-        target_layer = 15
-        out["attn_target_layer_index"] = target_layer
-        out["attn_row_target_layer"] = attn_rows_all[target_layer]
 
         x = RMSNorm(name="final_norm")(x)
         out["pre_logits"] = x
