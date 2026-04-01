@@ -13,6 +13,7 @@ from .analyze_attention import (
     calculate_changes_in_slope,
     plot_slope_correlation_matrix,
     plot_slope_change_scatter,
+    plot_slope_change_per_modality,
 )
 from .plot_names import (
     slugify,
@@ -49,7 +50,9 @@ def load_episode_infos(path: str) -> List[EpisodeInfo]:
 
 
 def load_record(npy_path: str) -> dict:
+    # print(f"Loading record from {npy_path}")
     p = np.load(npy_path, allow_pickle=True)
+    # print(f"Loaded record from {npy_path}, type: {type(p)}, shape: {p.shape}, dtype: {p.dtype}")
     if isinstance(p, np.ndarray) and p.shape == () and p.dtype == object:
         p = p.item()
     if not isinstance(p, dict):
@@ -60,7 +63,6 @@ def load_record(npy_path: str) -> dict:
 def reduce_attention_scores(step, key, method="average"):
     record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
     vals = record[key][0]
-
     if method == "average":
         return float(np.mean(vals))
     if method == "max":
@@ -108,12 +110,10 @@ def build_episode_series(ep, key, method):
         path = os.path.join(INPUT_DIR, f"step_{step}.npy")
         if not os.path.exists(path):
             continue
-
         try:
             val = reduce_attention_scores(step, key, method)
         except Exception:
             continue
-
         x = (step - ep.start_idx) / length if length else 0.0
         steps.append(x)
         values.append(val)
@@ -128,7 +128,7 @@ def build_all_series(ep, methods, norm="robust_zscore"):
     for k in keys:
         s, v = build_episode_series(ep, k, methods.get(k, "average"))
         all_series[k] = (s, normalize_modality(v, norm))
-
+    
     return all_series
 
 
@@ -136,7 +136,6 @@ def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
     keys = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
 
     if not any(len(steps) > 0 for steps, _ in all_series.values()):
-        print(f"No valid data for episode {ep.episode_num}")
         return
 
     task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
@@ -186,7 +185,6 @@ def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
     print(f"Also saved attention plot: {grouped_path}")
     plt.close()
 
-
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
@@ -198,27 +196,38 @@ def main():
     }
 
     norm = "robust_zscore"
-    results_per_episode = []
+
+    all_series_per_episode = []
 
     for ep in episodes:
+        print(f"Processing Episode {ep.episode_num} | success={ep.success}")
         all_series = build_all_series(ep, methods, norm)
-
-        slope_dict = calculate_changes_in_slope(
-            all_series=all_series,
-            short_label=short_label,
-        )
-
-        results_per_episode.append((ep, slope_dict))
+        all_series_per_episode.append((ep, all_series))
 
         plot_episode_all_modalities(ep, all_series, methods, norm)
 
-        plot_slope_correlation_matrix(
-            ep=ep,
-            all_series=all_series,
-            series_normalization=norm,
+    print("Done plotting individual episodes.")
+
+    for pct in range(1, 11, 1):
+        percentage = pct / 100.0
+
+        results_per_episode = []
+
+        for ep, all_series in all_series_per_episode:
+            slope_dict = calculate_changes_in_slope(
+                all_series=all_series,
+                short_label=short_label,
+                percentage=percentage,
+            )
+
+            results_per_episode.append((ep, slope_dict))
+
+        print(f"Plotting for first {pct}% of episodes")
+
+        plot_slope_change_per_modality(
+            results_per_episode=results_per_episode,
             output_dir=OUTPUT_DIR,
-            short_label=short_label,
-            norm_code=norm_code,
+            percentage=percentage,
         )
 
     plot_slope_change_scatter(

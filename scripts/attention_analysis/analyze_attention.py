@@ -67,23 +67,20 @@ def calculate_changes_in_slope(
     *,
     all_series,
     short_label,
+    percentage: float = 1.0,
     eps: float = 1e-8,
 ):
-    """
-    Count how many times the slope changes sign for each modality.
-
-    A slope is computed as the first difference between consecutive values.
-    Near-zero slopes (abs(slope) <= eps) are ignored.
-    """
     results = {}
 
     for modality_key, (_, values) in all_series.items():
         arr = np.asarray(values, dtype=float)
 
-        # Need at least 3 points to have 2 slopes and therefore 1 possible sign change
         if arr.size < 3:
             results[short_label(modality_key)] = 0
             continue
+
+        cutoff = max(2, int(len(arr) * percentage))
+        arr = arr[:cutoff]
 
         slopes = np.diff(arr)
 
@@ -99,10 +96,9 @@ def calculate_changes_in_slope(
             continue
 
         num_changes = sum(
-            1
-            for prev_sign, curr_sign in zip(signs[:-1], signs[1:])
-            if prev_sign != curr_sign
+            1 for a, b in zip(signs[:-1], signs[1:]) if a != b
         )
+
         results[short_label(modality_key)] = num_changes
 
     return results
@@ -153,3 +149,63 @@ def plot_slope_change_scatter(
     plt.close()
 
     print(f"Saved slope change scatter: {out_path}")
+
+def plot_slope_change_per_modality(
+    *,
+    results_per_episode,
+    output_dir,
+    percentage: float = 1.0,
+):
+    """
+    Plot slope sign changes per modality for each episode.
+
+    Args:
+        results_per_episode: list of (ep, slope_dict)
+        output_dir: base output directory
+        percentage: fraction of episode used (e.g., 0.2 = first 20%)
+    """
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+
+    if not results_per_episode:
+        print("No data to plot")
+        return
+
+    if not (0 < percentage <= 1.0):
+        raise ValueError("percentage must be in (0, 1]")
+
+    modalities = list(results_per_episode[0][1].keys())
+
+    n = len(modalities)
+    fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=True)
+
+    if n == 1:
+        axes = [axes]
+
+    for idx, modality in enumerate(modalities):
+        xs, ys, colors = [], [], []
+
+        for i, (ep, slope_dict) in enumerate(results_per_episode):
+            xs.append(i)
+            ys.append(slope_dict[modality])
+            colors.append("green" if ep.success else "red")
+
+        axes[idx].scatter(xs, ys, c=colors, alpha=0.7)
+        axes[idx].set_title(modality)
+        axes[idx].set_ylabel("Sign changes")
+
+    axes[-1].set_xlabel("Episode Index")
+
+    pct_str = f"{int(percentage * 100)}%"
+    fig.suptitle(f"Slope Sign Changes per Modality (First {pct_str} of Episode)", y=1.02)
+
+    plt.tight_layout()
+
+    out_dir = Path(output_dir) / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = out_dir / f"slope_changes_per_modality_{int(percentage*100)}pct.png"
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved per-modality slope scatter: {out_path}")
