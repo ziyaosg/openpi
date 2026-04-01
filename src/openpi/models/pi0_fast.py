@@ -229,7 +229,8 @@ class Pi0FAST(_model.BaseModel):
         elif isinstance(img_out, dict) and "stem" in img_out:
             Hp, Wp = int(img_out["stem"].shape[1]), int(img_out["stem"].shape[2])
         else:
-            Hp, Wp = int(jnp.sqrt(img_token_embeddings.shape[1])), int(img_token_embeddings.shape[1] // Hp)
+            Hp = int(jnp.sqrt(img_token_embeddings.shape[1]))
+            Wp = int(img_token_embeddings.shape[1] // Hp)
         
         return Hp, Wp
 
@@ -540,33 +541,39 @@ class Pi0FAST(_model.BaseModel):
         prefix_attn_mask_aligned = jnp.pad(prefix_attn_mask_aligned, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask_aligned, axis=-1) - 1
 
-        # Run the prefix prefill pass and collect raw attention rows from each
-        # transformer layer through Flax's "intermediates" collection.
-        #
-        # IMPORTANT:
-        # self.PaliGemma.llm is a ToNNX wrapper, so .apply(...) must be called on the
-        # wrapped Linen module, not on the wrapper itself.
-        (prefix_logits, kv_cache, _), intermediates = self.PaliGemma.llm.module.apply(
-            self.PaliGemma.llm.variables,
+        # Run the prefix prefill pass and allow Linen intermediates to be written.
+        prefix_logits, kv_cache, _ = self.PaliGemma.llm(
             embedded_prefix=prefix_emb_aligned,
             mask=prefix_attn_mask_aligned,
             positions=prefix_positions,
             decode=True,
-            mutable=["intermediates"],
+            mutable=True,
         )
 
-        # attn_row was stored with self.sow("intermediates", "attn_row", ...)
-        # inside each transformer block.
-        attn_rows_all = intermediates["intermediates"]["attn_row"]
+        # Read Intermediate state without mutating/popping it.
+        # Using nnx.pop(...) on the whole ToNNX graph can fail because the graph
+        # contains tuple nodes under scan/bridge internals.
+        intms = nnx.state(self.PaliGemma.llm, nnx.Intermediate)
 
-        # Depending on how scan returns intermediates, this may be a tuple/list.
-        # Convert it to one stacked array so layer indexing is consistent.
-        if isinstance(attn_rows_all, (tuple, list)):
-            attn_rows_all = jnp.stack(attn_rows_all, axis=0)
+        # TEMP DEBUG: inspect once, then remove after confirming everything works
+        print("intms:", intms)
 
-        # Optional temporary sanity check
+        # The intermediate state is nested under:
+        #   layers -> attn_row -> 0
+        #
+        # From the printed state, the stored VariableState has shape:
+        #   [18, 1, 8, 1075]
+        # which corresponds to:
+        #   [num_layers, batch, num_heads, num_keys]
+        attn_rows_all = intms["layers"]["attn_row"][0]
+
+        # Unwrap VariableState -> raw array
+        if hasattr(attn_rows_all, "value"):
+            attn_rows_all = attn_rows_all.value
+
+        print("attn_rows_all type:", type(attn_rows_all))
         print("attn_rows_all shape:", getattr(attn_rows_all, "shape", None))
-
+        
         # DESIGN CHOICE:
         # Use one later layer for the first simplified raw-attention visualization.
         RAW_ATTN_TARGET_LAYER = 15

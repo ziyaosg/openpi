@@ -436,7 +436,15 @@ class Module(nn.Module):
         blocks = [
             nn.scan(
                 block_cls,
-                variable_axes={"params": 0},
+                # IMPORTANT:
+                # 'intermediates' must be included here, otherwise
+                # self.sow("intermediates", "attn_row", ...) inside Block.__call__()
+                # will be dropped / not preserved through the scan transform.
+                #
+                # We scan params over depth (one parameter set per layer), and we also
+                # stack the "intermediates" collection over depth so we can retrieve one
+                # attention row per transformer layer after the forward pass.
+                variable_axes={"params": 0, "intermediates": 0},
                 split_rngs={"params": True, "dropout": True},
                 in_axes=(0, nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast),  # 0=kv_cache, 1=positions, 2=mask
                 length=self.depth,
