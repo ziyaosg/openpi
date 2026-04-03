@@ -11,76 +11,38 @@ from typing import List, Tuple
 
 import numpy as np
 from PIL import Image
-import sentencepiece
-
-import openpi.shared.download as download
 
 
 # ============================================================
 # PATHS
 # ============================================================
-INPUT_DIR = "/home/ziyao/Documents/policy_records_20260304_183031"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260304_183031/raw_attention_grids_folders"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/Projects/openpi/libero_videos/episode_summaries.json"
+INPUT_DIR = "/data/ann/policy_records_20260402_123333"
+OUTPUT_DIR = "/data/ann/policy_records_20260402_123333/raw_attention_grids_folders"
+EPISODE_SUMMARIES_JSON = "/data/ann/policy_records_20260402_123333/episode_summaries.json"
 
 
 # ============================================================
-# RAW ATTENTION KEYS
+# SETTINGS
 # ============================================================
-# These must match the debug structure you added in pi0_fast.py
-CAM_ATTR_KEYS = [
-    "outputs/debug/raw_attn/image/right_wrist_0_rgb/scores",
-    "outputs/debug/raw_attn/image/left_wrist_0_rgb/scores",
-]
+# Layer index into the 18-layer network.
+# Layer 15 (0-indexed) = 83% through the network — late enough for semantic
+# features, same as the original RAW_ATTN_TARGET_LAYER for comparability.
+TARGET_LAYER = 16
 
-CAM_GRID_KEYS = [
-    "outputs/debug/raw_attn/image/right_wrist_0_rgb/grid",
-    "outputs/debug/raw_attn/image/left_wrist_0_rgb/grid",
-]
+# Camera names must match the span/grid keys saved in pi0_fast.py
+CAM_NAMES = ["right_wrist_0_rgb", "left_wrist_0_rgb"]
 
 CAM_IMAGE_KEYS = [
     "inputs/observation/image",
     "inputs/observation/wrist_image",
 ]
 
-TASK_SCORE_KEY = "outputs/debug/raw_attn/task/scores"
-TASK_TOKEN_KEY = "outputs/debug/raw_attn/task/token_ids"
-
-STATE_SCORE_KEY = "outputs/debug/raw_attn/state/scores"
-STATE_TOKEN_KEY = "outputs/debug/raw_attn/state/token_ids"
-
-TARGET_LAYER_KEY = "outputs/debug/raw_attn/target_layer"
-
-
-# ============================================================
-# DISPLAY SETTINGS
-# ============================================================
-APPLY_RELU = False  # raw attention is already nonnegative
 ALPHA = 0.30
 SMOOTHING = "BILINEAR"
 
 BG = (255, 255, 255)
 GAP_X = 16
 GAP_Y = 16
-
-MAX_TEXT_TOKENS = 64
-BAR_H = 320
-
-
-# ============================================================
-# TOKENIZER
-# ============================================================
-def load_tokenizer():
-    path = download.maybe_download(
-        "gs://big_vision/paligemma_tokenizer.model",
-        gs={"token": "anon"},
-    )
-    with path.open("rb") as f:
-        sp = sentencepiece.SentencePieceProcessor(model_proto=f.read())
-    return sp
-
-
-SP = load_tokenizer()
 
 
 # ============================================================
@@ -148,14 +110,6 @@ def load_record(npy_path: str) -> dict:
 
 
 def as_u8_rgb(img) -> np.ndarray:
-    """
-    Accept:
-      - HWC uint8/float
-      - CHW uint8/float
-      - batched versions with batch size 1
-    Return:
-      - HWC uint8 RGB
-    """
     arr = np.array(img)
 
     if arr.ndim == 4 and arr.shape[0] == 1:
@@ -182,32 +136,36 @@ def as_u8_rgb(img) -> np.ndarray:
     return arr
 
 
-def to_1d_scores(arr: np.ndarray, key: str) -> np.ndarray:
+PERCENTILE_CLIP = 95   # clip hot outliers before normalizing
+GAMMA = 0.4            # power stretch to brighten mid-range patches
+
+
+def log_normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
     """
-    Raw attention scores are expected to be:
-      - (N,)
-      - (1, N)
-      - (B, N) and we use item 0
+    Pipeline:
+      1. Within-image-budget rescale: divide by total attention across all image patches
+         so task/state absorption (50-90% of softmax budget) doesn't suppress image scores.
+      2. log1p compress.
+      3. Clip to PERCENTILE_CLIP (default 95th) so 1-2 extreme patches don't monopolize
+         the colorscale — without this, p50 ≈ 0.0004 and only ~5/256 patches are visible.
+      4. Joint min-max across cameras.
+      5. Gamma stretch (x^GAMMA, default 0.4) to pull mid-range patches up into visible range.
     """
-    if not isinstance(arr, np.ndarray):
-        raise ValueError(f"{key} must be numpy array, got {type(arr)}")
+    total_image_attn = sum(float(h.sum()) for h in heats)
+    denom = total_image_attn if total_image_attn > 0 else 1.0
+    rescaled = [h.astype(np.float32) / denom for h in heats]
 
-    if arr.ndim == 1:
-        x = arr
-    elif arr.ndim == 2:
-        x = arr[0]
-    else:
-        raise ValueError(f"{key} must be 1D or 2D, got shape {arr.shape}")
-
-    return x.astype(np.float32)
-
-
-def normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
-    flat = np.concatenate([h.reshape(-1) for h in heats], axis=0)
+    compressed = [np.log1p(np.maximum(h, 0.0)) for h in rescaled]
+    flat = np.concatenate([h.reshape(-1) for h in compressed], axis=0)
     mn = float(flat.min())
-    mx = float(flat.max())
-    denom = (mx - mn) if mx > mn else 1.0
-    return [(h - mn) / denom for h in heats]
+    clip_val = float(np.percentile(flat, PERCENTILE_CLIP))
+    scale = (clip_val - mn) if clip_val > mn else 1.0
+
+    result = []
+    for h in compressed:
+        h01 = np.clip((h - mn) / scale, 0.0, 1.0)
+        result.append(h01 ** GAMMA)
+    return result
 
 
 def resize_heatmap(heat01: np.ndarray, out_hw: Tuple[int, int]) -> np.ndarray:
@@ -240,76 +198,13 @@ def overlay_heatmap(img_u8: np.ndarray, heat01_up: np.ndarray) -> np.ndarray:
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
-def scores_to_patch_grid(scores_1d: np.ndarray, grid_hw: Tuple[int, int], key: str) -> np.ndarray:
-    hp, wp = int(grid_hw[0]), int(grid_hw[1])
-    expected = hp * wp
-    if scores_1d.size != expected:
-        raise ValueError(
-            f"{key} expected {expected} patch scores for grid {grid_hw}, got {scores_1d.size}"
-        )
-    return scores_1d.reshape(hp, wp)
-
-
-def decode_token_ids(token_ids: np.ndarray) -> List[str]:
-    ids = np.asarray(token_ids)
-    if ids.ndim == 2:
-        ids = ids[0]
-    toks = []
-    for tid in ids.tolist():
-        piece = SP.id_to_piece(int(tid))
-        toks.append(piece.replace("▁", ""))
-    return toks
-
-
-# ============================================================
-# Bar chart rendering
-# ============================================================
-def render_bar_chart(scores: np.ndarray, token_ids: np.ndarray, title: str) -> Image.Image:
-    import matplotlib.pyplot as plt
-
-    vals = np.asarray(scores)
-    if vals.ndim == 2:
-        vals = vals[0]
-
-    labels = decode_token_ids(token_ids)
-
-    n = min(len(vals), len(labels), MAX_TEXT_TOKENS)
-    vals = vals[:n]
-    labels = labels[:n]
-
-    # Normalize locally for readability
-    vals = vals.astype(np.float32)
-    if vals.size > 0:
-        mn, mx = float(vals.min()), float(vals.max())
-        denom = (mx - mn) if mx > mn else 1.0
-        vals = (vals - mn) / denom
-
-    fig_w = max(10, 0.45 * n)
-    fig_h = 4
-
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-    ax.bar(np.arange(n), vals)
-    ax.set_title(title)
-    ax.set_xticks(np.arange(n))
-    ax.set_xticklabels(labels, rotation=90)
-    fig.tight_layout()
-
-    fig.canvas.draw()
-    w, h = fig.canvas.get_width_height()
-    img = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)[..., :3]
-    plt.close(fig)
-
-    return Image.fromarray(img, mode="RGB")
-
-
 # ============================================================
 # Grid layout
 # ============================================================
 def make_grid(overlays: List[np.ndarray], originals: List[np.ndarray]) -> Image.Image:
     """
-    Same layout as your Grad-CAM script:
-      - Row 0: overlays
-      - Row 1: originals
+    Row 0: overlays
+    Row 1: originals
     """
     assert len(overlays) == len(originals)
     C = len(overlays)
@@ -327,7 +222,6 @@ def make_grid(overlays: List[np.ndarray], originals: List[np.ndarray]) -> Image.
     for c in range(C):
         x0 = GAP_X + c * (cell_w + GAP_X)
 
-        # top row: overlay
         y0 = GAP_Y
         ov = Image.fromarray(overlays[c], mode="RGB")
         if overlays[c].shape[:2] != (cell_h, cell_w):
@@ -336,7 +230,6 @@ def make_grid(overlays: List[np.ndarray], originals: List[np.ndarray]) -> Image.
             ov = tmp
         canvas.paste(ov, (x0, y0))
 
-        # bottom row: original
         y1 = 2 * GAP_Y + cell_h
         org = Image.fromarray(originals[c], mode="RGB")
         if originals[c].shape[:2] != (cell_h, cell_w):
@@ -351,29 +244,47 @@ def make_grid(overlays: List[np.ndarray], originals: List[np.ndarray]) -> Image.
 # ============================================================
 # Per-step processing
 # ============================================================
-def process_one(npy_path: str, out_png: str, out_task_png: str, out_state_png: str) -> None:
+def process_one(npy_path: str, out_png: str) -> None:
     rec = load_record(npy_path)
 
-    if TARGET_LAYER_KEY not in rec:
-        raise KeyError(f"Missing {TARGET_LAYER_KEY} in {npy_path}")
+    full_attn_key = "outputs/debug/raw_attn/full_attn"
+    if full_attn_key not in rec:
+        raise KeyError(f"Missing {full_attn_key} in {npy_path}")
+
+    # full_attn shape: (num_layers, B, num_heads, S_prefix)
+    full_attn = np.asarray(rec[full_attn_key])
+    if full_attn.ndim != 4:
+        raise ValueError(f"{full_attn_key} expected 4D (L,B,H,S), got {full_attn.shape}")
+
+    # Select layer and max over heads -> (S_prefix,)
+    # Max preserves the strongest spatial signal from image-attending heads without
+    # diluting it with task/state-focused heads that are near-uniform over image patches.
+    attn_row = full_attn[TARGET_LAYER, 0, :, :].max(axis=0)  # (S_prefix,)
 
     heats, imgs = [], []
 
-    for attr_key, grid_key, img_key in zip(CAM_ATTR_KEYS, CAM_GRID_KEYS, CAM_IMAGE_KEYS):
-        if attr_key not in rec:
-            raise KeyError(f"Missing {attr_key} in {npy_path}")
+    for cam_name, img_key in zip(CAM_NAMES, CAM_IMAGE_KEYS):
+        span_key = f"outputs/debug/raw_attn/spans/image/{cam_name}"
+        grid_key = f"outputs/debug/meta/image_grids/{cam_name}"
+
+        if span_key not in rec:
+            raise KeyError(f"Missing {span_key} in {npy_path}")
         if grid_key not in rec:
             raise KeyError(f"Missing {grid_key} in {npy_path}")
         if img_key not in rec:
             raise KeyError(f"Missing {img_key} in {npy_path}")
 
-        scores_1d = to_1d_scores(rec[attr_key], attr_key)
-        if APPLY_RELU:
-            scores_1d = np.maximum(scores_1d, 0.0)
+        span = tuple(int(x) for x in np.asarray(rec[span_key]).tolist())  # (start, end)
+        grid_hw = tuple(int(x) for x in np.asarray(rec[grid_key]).tolist())  # (Hp, Wp)
 
-        grid_hw = tuple(np.asarray(rec[grid_key]).tolist())
-        heat = scores_to_patch_grid(scores_1d, grid_hw, attr_key)
+        cam_scores = attn_row[span[0]:span[1]]  # (Hp*Wp,)
+        Hp, Wp = grid_hw
+        if cam_scores.size != Hp * Wp:
+            raise ValueError(
+                f"{cam_name}: span length {cam_scores.size} != grid {Hp}x{Wp}={Hp*Wp}"
+            )
 
+        heat = cam_scores.reshape(Hp, Wp)
         img = as_u8_rgb(rec[img_key])
 
         heats.append(heat)
@@ -382,10 +293,11 @@ def process_one(npy_path: str, out_png: str, out_task_png: str, out_state_png: s
     if np.array_equal(imgs[0], imgs[1]):
         print(
             f"[WARN] Underlying images identical in {npy_path}. "
-            f"Keys used: {CAM_IMAGE_KEYS[0]} and {CAM_IMAGE_KEYS[1]}"
+            f"Keys: {CAM_IMAGE_KEYS[0]} and {CAM_IMAGE_KEYS[1]}"
         )
 
-    heats01 = normalize_joint(heats)
+    # Joint log normalization across cameras (log1p + shared min-max)
+    heats01 = log_normalize_joint(heats)
 
     overlays, originals = [], []
     for img, h01 in zip(imgs, heats01):
@@ -396,24 +308,6 @@ def process_one(npy_path: str, out_png: str, out_task_png: str, out_state_png: s
     grid = make_grid(overlays, originals)
     Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     grid.save(out_png)
-
-    # task chart
-    if TASK_SCORE_KEY in rec and TASK_TOKEN_KEY in rec:
-        task_img = render_bar_chart(
-            rec[TASK_SCORE_KEY],
-            rec[TASK_TOKEN_KEY],
-            title=f"Raw Attention to Task Tokens (layer {int(rec[TARGET_LAYER_KEY])})",
-        )
-        task_img.save(out_task_png)
-
-    # state chart
-    if STATE_SCORE_KEY in rec and STATE_TOKEN_KEY in rec:
-        state_img = render_bar_chart(
-            rec[STATE_SCORE_KEY],
-            rec[STATE_TOKEN_KEY],
-            title=f"Raw Attention to State Tokens (layer {int(rec[TARGET_LAYER_KEY])})",
-        )
-        state_img.save(out_state_png)
 
 
 # ============================================================
@@ -437,14 +331,9 @@ def main() -> None:
         task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
         ep_folder = f"ep{ep.episode_num}_{str(ep.success).lower()}"
 
-        # Main 2x2 image grid
         out_png = str(out_dir / task_folder / ep_folder / f"step_{s:06d}.png")
 
-        # Separate token charts in the same episode folder
-        out_task_png = str(out_dir / task_folder / ep_folder / f"step_{s:06d}_task.png")
-        out_state_png = str(out_dir / task_folder / ep_folder / f"step_{s:06d}_state.png")
-
-        process_one(f, out_png, out_task_png, out_state_png)
+        process_one(f, out_png)
         print(f"[OK] {out_png}")
 
 

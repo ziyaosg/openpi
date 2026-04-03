@@ -303,14 +303,10 @@ class Block(nn.Module):
         outputs = self.drop(outputs, deterministic)
         outputs = residual + outputs
 
-        # Save the raw attention row for debugging without changing the scan return signature.
-        # attn_last_row should have shape [B, H, S]:
-        #   B = batch
-        #   H = number of heads
-        #   S = number of key positions
-        self.sow("intermediates", "attn_row", attn_last_row)
-
-        return outputs, kv_cache
+        # Return attn_last_row alongside kv_cache so the scan stacks it across layers.
+        # Shape [B, H, S]:
+        #   B = batch, H = number of heads, S = number of key positions
+        return outputs, (kv_cache, attn_last_row)
 
 
 KVCache: TypeAlias = tuple[at.Int[at.Array, " b"], at.Float[at.Array, "b _t _k _h"], at.Float[at.Array, "b _t _v _h"]]
@@ -436,15 +432,9 @@ class Module(nn.Module):
         blocks = [
             nn.scan(
                 block_cls,
-                # IMPORTANT:
-                # 'intermediates' must be included here, otherwise
-                # self.sow("intermediates", "attn_row", ...) inside Block.__call__()
-                # will be dropped / not preserved through the scan transform.
-                #
-                # We scan params over depth (one parameter set per layer), and we also
-                # stack the "intermediates" collection over depth so we can retrieve one
-                # attention row per transformer layer after the forward pass.
-                variable_axes={"params": 0, "intermediates": 0},
+                # We scan params over depth (one parameter set per layer).
+                # attn_last_row is returned directly from Block and stacked by the scan.
+                variable_axes={"params": 0},
                 split_rngs={"params": True, "dropout": True},
                 in_axes=(0, nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast),  # 0=kv_cache, 1=positions, 2=mask
                 length=self.depth,
@@ -452,12 +442,13 @@ class Module(nn.Module):
         ]
 
         for block in blocks:
-            # Because the model is scanned over depth, attn_rows_all will collect one
-            # [B, H, S] tensor per transformer layer.
-            x, kv_cache = block(x, kv_cache, positions, mask, decode, deterministic)
+            # The scan stacks (kv_cache, attn_last_row) across all depth layers.
+            # attn_rows shape after scan: [depth, B, H, S]
+            x, (kv_cache, attn_rows) = block(x, kv_cache, positions, mask, decode, deterministic)
 
         assert x.dtype == jnp.dtype(self.embed_dtype)  # Sanity check.
         out["encoded"] = x
+        out["attn_rows"] = attn_rows  # [depth, B, H, S] — one row per layer, raw softmax weights
 
         x = RMSNorm(name="final_norm")(x)
         out["pre_logits"] = x

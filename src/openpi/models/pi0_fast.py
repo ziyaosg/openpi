@@ -550,55 +550,8 @@ class Pi0FAST(_model.BaseModel):
             mutable=True,
         )
 
-        # Read Intermediate state without mutating/popping it.
-        # Using nnx.pop(...) on the whole ToNNX graph can fail because the graph
-        # contains tuple nodes under scan/bridge internals.
-        intms = nnx.state(self.PaliGemma.llm, nnx.Intermediate)
-
-        # TEMP DEBUG: inspect once, then remove after confirming everything works
-        print("intms:", intms)
-
-        # The intermediate state is nested under:
-        #   layers -> attn_row -> 0
-        #
-        # From the printed state, the stored VariableState has shape:
-        #   [18, 1, 8, 1075]
-        # which corresponds to:
-        #   [num_layers, batch, num_heads, num_keys]
-        attn_rows_all = intms["layers"]["attn_row"][0]
-
-        # Unwrap VariableState -> raw array
-        if hasattr(attn_rows_all, "value"):
-            attn_rows_all = attn_rows_all.value
-
-        print("attn_rows_all type:", type(attn_rows_all))
-        print("attn_rows_all shape:", getattr(attn_rows_all, "shape", None))
-        
-        # DESIGN CHOICE:
-        # Use one later layer for the first simplified raw-attention visualization.
-        RAW_ATTN_TARGET_LAYER = 15
-
-        # Select the chosen layer.
-        # Expected shape: [B, H, S]
-        attn_row_target_layer = attn_rows_all[RAW_ATTN_TARGET_LAYER]
-
         # The final prefix logit predicts the FIRST decoded action token.
         last_logit = prefix_logits[:, -1:]
-
-        # Raw-attention debug for the same first decoded action token.
-        raw_attn_debug = None
-        if attn_row_target_layer is not None:
-            # Average across heads for a simpler first visualization.
-            # [B, H, S] -> [B, S]
-            attn_row_mean = jnp.mean(attn_row_target_layer, axis=1)
-
-            raw_attn_debug = self.pack_action_attention_debug(
-                attn_row_mean,
-                spans,
-                meta,
-                observation,
-                target_layer=RAW_ATTN_TARGET_LAYER,
-            )
 
         # choose the target token for the FIRST decoded token (step 0)
         # use greedy choice to make attribution deterministic
@@ -615,10 +568,6 @@ class Pi0FAST(_model.BaseModel):
 
         # collect attributions into a single debug payload
         debug = {"attr": {}, "spans": spans, "meta": meta}
-
-        # Add raw attention visualization payload if available.
-        if raw_attn_debug is not None:
-            debug["raw_attn"] = raw_attn_debug
 
         # -----------------------
         # Image Grad-CAM (per view)
@@ -699,6 +648,56 @@ class Pi0FAST(_model.BaseModel):
         
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
 
+        # ---------------------------------------------------------------
+        # Decode step 0 — run manually (outside while_loop) so we can
+        # call with mutable=True and capture the first action token's
+        # attention across the full prefix.
+        # ---------------------------------------------------------------
+        rng, rng_step0 = jax.random.split(rng)
+        if temperature > 0.0:
+            token_0 = jax.random.categorical(rng_step0, last_logit / temperature, axis=-1)
+        else:
+            token_0 = jnp.argmax(last_logit, axis=-1)   # (B, 1)
+
+        output_tokens = put_along_last_axis(
+            output_tokens, jnp.broadcast_to(0, (token_0.shape[0], 1)), token_0
+        )
+
+        has_eos_0 = jnp.any(token_0 == PALIGEMMA_EOS_TOKEN, axis=-1)
+        all_eos_0 = jnp.all(has_eos_0)
+
+        token_emb_0 = self.PaliGemma.llm(token_0, embed_only=True)
+        positions_0 = prefill_len[:, None] + 1
+        mask_0 = jnp.logical_and(
+            jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
+            jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
+            < (jnp.broadcast_to(prefill_size + 1, (prefix_start.shape[0], 1, 1))),
+        )
+        last_logit_1, kv_cache_1, out_step0 = self.PaliGemma.llm(
+            embedded_prefix=token_emb_0,
+            mask=mask_0,
+            positions=positions_0,
+            decode=True,
+            kv_cache=kv_cache,
+        )
+
+        # attn_rows_step0 comes directly from the transformer output.
+        # Shape: [num_layers, B, H, S_cache]
+        attn_rows_step0 = out_step0["attn_rows"]
+
+        # Full attention matrix: all layers, all heads, trimmed to prefix length.
+        # Shape: [num_layers, B, H, S_prefix] — raw softmax weights, no aggregation.
+        # The visualization script chooses layer, head aggregation, and normalization.
+        attn_full = attn_rows_step0[:, :, :, :prefill_size]               # [L, B, H, S_prefix]
+
+        debug["raw_attn"] = {
+            "full_attn": attn_full,
+            "spans": spans,
+        }
+
+        # ---------------------------------------------------------------
+        # Decode steps 1..N — continue from where step 0 left off.
+        # ---------------------------------------------------------------
         def step(carry):
             rng, last_logit, output_tokens, cache, _, step = carry
 
@@ -736,8 +735,9 @@ class Pi0FAST(_model.BaseModel):
             return (~all_eos) & (step < max_decoding_steps)
 
         # Use lax.while_loop so we can jit the full decoding loop.
+        # Start at step=1 since step 0 was already run above.
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
-            cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
+            cond, step, (rng, last_logit_1, output_tokens, kv_cache_1, all_eos_0, 1)
         )
         if debug is not None:
             return output_tokens, debug

@@ -279,7 +279,7 @@ class TokenizeFASTInputs(DataTransformFn):
             state_piece_end,
         ) = self.tokenizer.tokenize(prompt, state, actions)
 
-        print(f"State token len: {state_len}, task token len: {task_len}")
+        # print(f"State token len: {state_len}, task token len: {task_len}")
 
         return {
             **data,
