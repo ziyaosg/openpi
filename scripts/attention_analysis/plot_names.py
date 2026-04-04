@@ -51,13 +51,3 @@ def reduction_code(methods: dict[str, str]) -> str:
 def attention_plot_filename(ep, norm_str: str, red_str: str) -> str:
     return f"t{ep.task_id}_ep{ep.episode_num}_attn_{norm_str}_{red_str}.png"
 
-
-def correlation_filename(ep, norm_str: str) -> str:
-    return f"t{ep.task_id}_ep{ep.episode_num}_corr_{norm_str}.png"
-
-
-def slope_correlation_filename(ep, norm_str: str) -> str:
-    return f"t{ep.task_id}_ep{ep.episode_num}_slope_corr_{norm_str}.png"
-
-def changes_in_slope_filename(ep, norm_str: str) -> str:
-    return f"t{ep.task_id}_ep{ep.episode_num}_slope_changes_{norm_str}.png"

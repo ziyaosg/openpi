@@ -10,10 +10,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .analyze_attention import (
-    calculate_changes_in_slope,
-    plot_slope_correlation_matrix,
-    plot_slope_change_scatter,
-    plot_slope_change_per_modality,
+    calculate_extrema,
+    plot_extrema_scatter,
+    plot_extrema_per_modality,
 )
 from .plot_names import (
     slugify,
@@ -58,6 +57,115 @@ def load_record(npy_path: str) -> dict:
     if not isinstance(p, dict):
         raise TypeError(f"Expected dict in {npy_path}, got {type(p)}")
     return p
+
+from pathlib import Path
+import numpy as np
+import os
+
+
+def save_local_extrema_steps_from_records(
+    *,
+    input_dir,
+    key,
+    output_dir,
+    name=None,
+    eps: float = 1e-8,
+):
+    """
+    For files like step_0.npy, step_1.npy, ..., load one scalar per step from record[key]
+    and save the step numbers where that scalar is a local min / local max.
+
+    Assumes load_record(path) exists.
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    step_files = sorted(
+        input_dir.glob("step_*.npy"),
+        key=lambda p: int(p.stem.split("_")[1]),
+    )
+
+    if not step_files:
+        raise ValueError(f"No step_*.npy files found in {input_dir}")
+
+    steps = []
+    values = []
+
+    for path in step_files:
+        step = int(path.stem.split("_")[1])
+        record = load_record(str(path))
+        val = record[key]
+
+        # Reduce to scalar if needed
+        arr = np.asarray(val, dtype=float)
+        scalar = float(arr.mean())
+
+        steps.append(step)
+        values.append(scalar)
+
+    values = np.asarray(values, dtype=float)
+
+    local_mins = []
+    local_maxs = []
+
+    for i in range(1, len(values) - 1):
+        prev_v = values[i - 1]
+        curr_v = values[i]
+        next_v = values[i + 1]
+
+        if (curr_v < prev_v - eps) and (curr_v < next_v - eps):
+            local_mins.append(steps[i])
+
+        if (curr_v > prev_v + eps) and (curr_v > next_v + eps):
+            local_maxs.append(steps[i])
+
+    prefix = name or key.replace("/", "_")
+
+    min_path = output_dir / f"{prefix}_local_mins.txt"
+    max_path = output_dir / f"{prefix}_local_maxs.txt"
+
+    with open(min_path, "w") as f:
+        for step in local_mins:
+            f.write(f"{step}\n")
+
+    with open(max_path, "w") as f:
+        for step in local_maxs:
+            f.write(f"{step}\n")
+
+    print(f"Saved local mins to: {min_path}")
+    print(f"Saved local maxs to: {max_path}")
+
+    return steps, values, local_mins, local_maxs
+
+def plot_individual_image_patch_attention(step: int, key: str):
+    record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
+    vals = record[key][0]  # (16, 16)
+
+    if vals.shape != (16, 16):
+        raise ValueError(f"Expected (16,16), got {vals.shape}")
+
+    flat_vals = vals.flatten()
+
+    labels = [(i, j) for i in range(16) for j in range(16)]
+    x = np.arange(256)
+
+    # Plot
+    plt.figure(figsize=(14, 5))
+    plt.bar(x, flat_vals)
+
+    plt.ylabel("Raw Attention")
+    plt.xlabel("Patch (row, col)")
+
+    tick_positions = x[::16]  # one per row
+    tick_labels = [str(labels[i]) for i in tick_positions]
+    plt.xticks(tick_positions, tick_labels, rotation=45)
+
+    plt.title(f"Image Patch Attention | step={step}")
+
+    plt.tight_layout()
+    plt.savefig(f"image_patch_attention_step_{step}.png", dpi=150)
+    plt.close()
 
 
 def reduce_attention_scores(step, key, method="average"):
@@ -115,7 +223,9 @@ def build_episode_series(ep, key, method):
         except Exception:
             continue
         x = (step - ep.start_idx) / length if length else 0.0
-        steps.append(x)
+        # Uncomment out the line below if you want normalized episode progress
+        # steps.append(x)
+        steps.append(step)
         values.append(val)
 
     return steps, values
@@ -208,33 +318,42 @@ def main():
 
     print("Done plotting individual episodes.")
 
-    for pct in range(1, 11, 1):
-        percentage = pct / 100.0
+    # for pct in range(1, 11, 1):
+    #     percentage = pct / 100.0
 
-        results_per_episode = []
+    #     results_per_episode = []
 
-        for ep, all_series in all_series_per_episode:
-            slope_dict = calculate_changes_in_slope(
-                all_series=all_series,
-                short_label=short_label,
-                percentage=percentage,
-            )
+    #     for ep, all_series in all_series_per_episode:
+    #         extrema_dict = calculate_extrema(
+    #         all_series=all_series,
+    #         short_label=short_label,
+    #         percentage=percentage,
+    #     )
 
-            results_per_episode.append((ep, slope_dict))
+    #     results_per_episode.append((ep, extrema_dict))
 
-        print(f"Plotting for first {pct}% of episodes")
+    #     print(f"Plotting for first {pct}% of episodes")
 
-        plot_slope_change_per_modality(
-            results_per_episode=results_per_episode,
-            output_dir=OUTPUT_DIR,
-            percentage=percentage,
-        )
+    #     plot_extrema_per_modality(
+    #         results_per_episode=results_per_episode,
+    #         output_dir=OUTPUT_DIR,
+    #         percentage=percentage,
+    #     )
 
-    plot_slope_change_scatter(
-        results_per_episode=results_per_episode,
-        output_dir=OUTPUT_DIR,
-    )
+    # plot_extrema_scatter(
+    #     results_per_episode=results_per_episode,
+    #     output_dir=OUTPUT_DIR,
+    # )
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    # save_local_extrema_steps_from_records(
+    #     input_dir=INPUT_DIR,
+    #     key=IMG1_KEY,
+    #     output_dir=OUTPUT_DIR,
+    #     name="image1_patches",
+    # )
+
+    for i in range(1470, 1481):
+        plot_individual_image_patch_attention(step=i, key=IMG1_KEY)
