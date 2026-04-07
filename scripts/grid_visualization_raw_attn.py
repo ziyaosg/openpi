@@ -24,10 +24,21 @@ EPISODE_SUMMARIES_JSON = "/data/ann/policy_records_20260402_123333/episode_summa
 # ============================================================
 # SETTINGS
 # ============================================================
-# Layer index into the 18-layer network.
-# Layer 15 (0-indexed) = 83% through the network — late enough for semantic
-# features, same as the original RAW_ATTN_TARGET_LAYER for comparability.
+# Layer whose attention is used for the final heatmap.  Layer 16 (0-indexed)
+# has the best spatial concentration among the later layers — the top patch on
+# the wrist camera captures ~33 % of that camera's budget on average.
 TARGET_LAYER = 16
+
+# Layer used only for head selection.  Layer 1 puts ~55 % of its budget into
+# image tokens and its head ranking is perfectly stable across steps: heads
+# [0, 1, 3] always win the ratio test.  We use this stable ranking to decide
+# which heads to read from TARGET_LAYER, giving us layer-16 spatial sharpness
+# with layer-1 head stability.
+HEAD_SELECTION_LAYER = 1
+
+# How many of the top image-focused heads (ranked by img/text ratio at
+# HEAD_SELECTION_LAYER) to include when computing the final attention row.
+TOP_K_HEADS = 3
 
 # Camera names must match the span/grid keys saved in pi0_fast.py
 CAM_NAMES = ["right_wrist_0_rgb", "left_wrist_0_rgb"]
@@ -138,6 +149,43 @@ def as_u8_rgb(img) -> np.ndarray:
 
 PERCENTILE_CLIP = 95   # clip hot outliers before normalizing
 GAMMA = 0.4            # power stretch to brighten mid-range patches
+
+
+def select_heads(
+    layer_attn: np.ndarray,
+    all_img_spans: List[Tuple[int, int]],
+    task_span: Tuple[int, int] | None,
+    state_span: Tuple[int, int] | None,
+    top_k: int,
+) -> np.ndarray:
+    """
+    Rank attention heads by image/(task+state) budget ratio and return the
+    indices of the top_k most image-focused heads.
+
+    Args:
+        layer_attn:    (H, S_prefix) softmax weights for one layer, one batch item.
+        all_img_spans: list of (start, end) token ranges for every camera.
+        task_span:     (start, end) token range for task tokens, or None.
+        state_span:    (start, end) token range for state tokens, or None.
+        top_k:         how many heads to keep.
+
+    Returns:
+        1-D int array of length min(top_k, H) with selected head indices.
+    """
+    H = layer_attn.shape[0]
+
+    img_budget = np.zeros(H, dtype=np.float32)
+    for s0, s1 in all_img_spans:
+        img_budget += layer_attn[:, s0:s1].sum(axis=1)
+
+    text_budget = np.zeros(H, dtype=np.float32)
+    if task_span is not None:
+        text_budget += layer_attn[:, task_span[0]:task_span[1]].sum(axis=1)
+    if state_span is not None:
+        text_budget += layer_attn[:, state_span[0]:state_span[1]].sum(axis=1)
+
+    ratio = img_budget / (text_budget + 1e-9)
+    return np.argsort(ratio)[-min(top_k, H):]
 
 
 def log_normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
@@ -256,26 +304,49 @@ def process_one(npy_path: str, out_png: str) -> None:
     if full_attn.ndim != 4:
         raise ValueError(f"{full_attn_key} expected 4D (L,B,H,S), got {full_attn.shape}")
 
-    # Select layer and max over heads -> (S_prefix,)
-    # Max preserves the strongest spatial signal from image-attending heads without
-    # diluting it with task/state-focused heads that are near-uniform over image patches.
-    attn_row = full_attn[TARGET_LAYER, 0, :, :].max(axis=0)  # (S_prefix,)
-
-    heats, imgs = [], []
-
+    # ------------------------------------------------------------------
+    # Collect spans for all cameras (needed for head selection).
+    # ------------------------------------------------------------------
+    cam_spans: List[Tuple[int, int]] = []
+    cam_grids: List[Tuple[int, int]] = []
     for cam_name, img_key in zip(CAM_NAMES, CAM_IMAGE_KEYS):
         span_key = f"outputs/debug/raw_attn/spans/image/{cam_name}"
         grid_key = f"outputs/debug/meta/image_grids/{cam_name}"
-
         if span_key not in rec:
             raise KeyError(f"Missing {span_key} in {npy_path}")
         if grid_key not in rec:
             raise KeyError(f"Missing {grid_key} in {npy_path}")
         if img_key not in rec:
             raise KeyError(f"Missing {img_key} in {npy_path}")
+        cam_spans.append(tuple(int(x) for x in np.asarray(rec[span_key]).tolist()))
+        cam_grids.append(tuple(int(x) for x in np.asarray(rec[grid_key]).tolist()))
 
-        span = tuple(int(x) for x in np.asarray(rec[span_key]).tolist())  # (start, end)
-        grid_hw = tuple(int(x) for x in np.asarray(rec[grid_key]).tolist())  # (Hp, Wp)
+    # ------------------------------------------------------------------
+    # Head selection: rank heads by img/text ratio at HEAD_SELECTION_LAYER
+    # (stable), then apply that ranking to TARGET_LAYER (spatially sharp).
+    # ------------------------------------------------------------------
+    task_span  = None
+    state_span = None
+    task_key  = "outputs/debug/raw_attn/spans/task"
+    state_key = "outputs/debug/raw_attn/spans/state"
+    if task_key in rec:
+        task_span  = tuple(int(x) for x in np.asarray(rec[task_key]).tolist())
+    if state_key in rec:
+        state_span = tuple(int(x) for x in np.asarray(rec[state_key]).tolist())
+
+    selector_attn = full_attn[HEAD_SELECTION_LAYER, 0, :, :]  # (H, S_prefix)
+    top_head_idx  = select_heads(selector_attn, cam_spans, task_span, state_span, TOP_K_HEADS)
+
+    target_attn = full_attn[TARGET_LAYER, 0, :, :]            # (H, S_prefix)
+    attn_row    = target_attn[top_head_idx, :].max(axis=0)    # (S_prefix,)
+
+    print(f"  heads selected via layer {HEAD_SELECTION_LAYER}, applied to layer {TARGET_LAYER}: {sorted(int(h) for h in top_head_idx)}")
+
+    heats, imgs = [], []
+
+    for (span, grid_hw), (cam_name, img_key) in zip(
+        zip(cam_spans, cam_grids), zip(CAM_NAMES, CAM_IMAGE_KEYS)
+    ):
 
         cam_scores = attn_row[span[0]:span[1]]  # (Hp*Wp,)
         Hp, Wp = grid_hw
@@ -285,7 +356,7 @@ def process_one(npy_path: str, out_png: str) -> None:
             )
 
         heat = cam_scores.reshape(Hp, Wp)
-        img = as_u8_rgb(rec[img_key])
+        img = as_u8_rgb(rec[img_key])  # type: ignore[arg-type]
 
         heats.append(heat)
         imgs.append(img)
