@@ -10,9 +10,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .analyze_attention import (
-    calculate_extrema,
-    plot_extrema_scatter,
-    plot_extrema_per_modality,
+    calculate_changes_in_slope,
+    plot_slope_change_scatter,
+    plot_slope_change_per_modality,
+    plot_patch_distribution_per_episode,
+    plot_patch_distribution_aggregated,
 )
 from .plot_names import (
     slugify,
@@ -22,14 +24,51 @@ from .plot_names import (
     attention_plot_filename,
 )
 
-INPUT_DIR = "/home/annsong/Documents/policy_records_20260324_141715"
-OUTPUT_DIR = "/home/annsong/Documents/policy_records_20260324_141715/plots"
-EPISODE_SUMMARIES_JSON = "/home/annsong/Documents/policy_records_20260324_141715/episode_summaries.json"
+# ============================================================
+# PATHS
+# ============================================================
+INPUT_DIR = "/home/ziyao/Documents/policy_records_20260324_141715"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260324_141715/attention_analysis_mean_&_zscore"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260324_141715/episode_summaries.json"
 
-IMG1_KEY = "outputs/debug/attr/image/right_wrist_0_rgb"
-IMG2_KEY = "outputs/debug/attr/image/left_wrist_0_rgb"
-TASK_KEY = "outputs/debug/attr/task/scores"
+# ============================================================
+# MODALITY KEYS  (must match keys saved in the .npy files)
+# ============================================================
+IMG1_KEY  = "outputs/debug/attr/image/right_wrist_0_rgb"
+IMG2_KEY  = "outputs/debug/attr/image/left_wrist_0_rgb"
+TASK_KEY  = "outputs/debug/attr/task/scores"
 STATE_KEY = "outputs/debug/attr/state/scores"
+
+# ============================================================
+# REDUCTION METHOD
+# How to collapse the 2D heatmap (or 1D score array for task/state)
+# down to a single scalar per step.
+# Options: "average", "median", "max", "min", "sum", "sqrt_norm_sum"
+# Note: use "average" not "mean"
+# ============================================================
+REDUCTION_METHOD_IMAGE = "average"
+REDUCTION_METHOD_TASK  = "average"
+REDUCTION_METHOD_STATE = "average"
+
+# ============================================================
+# NORMALIZATION METHOD
+# How to normalize the per-step scalar series within each episode
+# so modalities are on a comparable scale.
+# Options: "zscore"         -- center on mean, scale by std
+#          "robust_zscore"  -- center on median, scale by MAD
+#          "minmax"         -- scale to [0, 1]
+#          "none"           -- no normalization, raw values
+# ============================================================
+NORM_METHOD = "zscore"
+
+# Derived from the three variables above — do not edit directly.
+# Used wherever both the modality key and its reduction method are needed together.
+REDUCTION_PER_KEY = {
+    IMG1_KEY:  REDUCTION_METHOD_IMAGE,
+    IMG2_KEY:  REDUCTION_METHOD_IMAGE,
+    TASK_KEY:  REDUCTION_METHOD_TASK,
+    STATE_KEY: REDUCTION_METHOD_STATE,
+}
 
 
 @dataclass(frozen=True)
@@ -48,131 +87,21 @@ def load_episode_infos(path: str) -> List[EpisodeInfo]:
     return [EpisodeInfo(**d) for d in data]
 
 
-def load_record(npy_path: str) -> dict:
-    # print(f"Loading record from {npy_path}")
+def _load_record(npy_path: str) -> dict:
     p = np.load(npy_path, allow_pickle=True)
-    # print(f"Loaded record from {npy_path}, type: {type(p)}, shape: {p.shape}, dtype: {p.dtype}")
     if isinstance(p, np.ndarray) and p.shape == () and p.dtype == object:
         p = p.item()
     if not isinstance(p, dict):
         raise TypeError(f"Expected dict in {npy_path}, got {type(p)}")
     return p
 
-from pathlib import Path
-import numpy as np
-import os
 
-
-def save_local_extrema_steps_from_records(
-    *,
-    input_dir,
-    key,
-    output_dir,
-    name=None,
-    eps: float = 1e-8,
-):
-    """
-    For files like step_0.npy, step_1.npy, ..., load one scalar per step from record[key]
-    and save the step numbers where that scalar is a local min / local max.
-
-    Assumes load_record(path) exists.
-    """
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    step_files = sorted(
-        input_dir.glob("step_*.npy"),
-        key=lambda p: int(p.stem.split("_")[1]),
-    )
-
-    if not step_files:
-        raise ValueError(f"No step_*.npy files found in {input_dir}")
-
-    steps = []
-    values = []
-
-    for path in step_files:
-        step = int(path.stem.split("_")[1])
-        record = load_record(str(path))
-        val = record[key]
-
-        # Reduce to scalar if needed
-        arr = np.asarray(val, dtype=float)
-        scalar = float(arr.mean())
-
-        steps.append(step)
-        values.append(scalar)
-
-    values = np.asarray(values, dtype=float)
-
-    local_mins = []
-    local_maxs = []
-
-    for i in range(1, len(values) - 1):
-        prev_v = values[i - 1]
-        curr_v = values[i]
-        next_v = values[i + 1]
-
-        if (curr_v < prev_v - eps) and (curr_v < next_v - eps):
-            local_mins.append(steps[i])
-
-        if (curr_v > prev_v + eps) and (curr_v > next_v + eps):
-            local_maxs.append(steps[i])
-
-    prefix = name or key.replace("/", "_")
-
-    min_path = output_dir / f"{prefix}_local_mins.txt"
-    max_path = output_dir / f"{prefix}_local_maxs.txt"
-
-    with open(min_path, "w") as f:
-        for step in local_mins:
-            f.write(f"{step}\n")
-
-    with open(max_path, "w") as f:
-        for step in local_maxs:
-            f.write(f"{step}\n")
-
-    print(f"Saved local mins to: {min_path}")
-    print(f"Saved local maxs to: {max_path}")
-
-    return steps, values, local_mins, local_maxs
-
-def plot_individual_image_patch_attention(step: int, key: str):
-    record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
-    vals = record[key][0]  # (16, 16)
-
-    if vals.shape != (16, 16):
-        raise ValueError(f"Expected (16,16), got {vals.shape}")
-
-    flat_vals = vals.flatten()
-
-    labels = [(i, j) for i in range(16) for j in range(16)]
-    x = np.arange(256)
-
-    # Plot
-    plt.figure(figsize=(14, 5))
-    plt.bar(x, flat_vals)
-
-    plt.ylabel("Raw Attention")
-    plt.xlabel("Patch (row, col)")
-
-    tick_positions = x[::16]  # one per row
-    tick_labels = [str(labels[i]) for i in tick_positions]
-    plt.xticks(tick_positions, tick_labels, rotation=45)
-
-    plt.title(f"Image Patch Attention | step={step}")
-
-    plt.tight_layout()
-    plt.savefig(f"image_patch_attention_step_{step}.png", dpi=150)
-    plt.close()
-
-
-def reduce_attention_scores(step, key, method="average"):
-    record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
-    vals = record[key][0]
+def _reduce(vals, method: str) -> float:
+    vals = np.asarray(vals)
     if method == "average":
         return float(np.mean(vals))
+    if method == "median":
+        return float(np.median(vals))
     if method == "max":
         return float(np.max(vals))
     if method == "min":
@@ -181,11 +110,28 @@ def reduce_attention_scores(step, key, method="average"):
         return float(np.sum(vals))
     if method == "sqrt_norm_sum":
         return float(np.sum(vals) / np.sqrt(vals.size))
+    raise ValueError(f"Unknown reduction method: {method}")
 
-    raise ValueError(method)
+
+def _load_episode_records(ep) -> list:
+    """Load each step's npy file exactly once. Returns list of (normalized_time, record) pairs."""
+    length = ep.end_idx - ep.start_idx
+    records = []
+    for step in range(ep.start_idx, ep.end_idx + 1):
+        path = os.path.join(INPUT_DIR, f"step_{step}.npy")
+        if not os.path.exists(path):
+            continue
+        try:
+            record = _load_record(path)
+        except Exception as e:
+            print(f"[WARN] step {step}: {e}")
+            continue
+        t = (step - ep.start_idx) / length if length else 0.0
+        records.append((t, record))
+    return records
 
 
-def normalize_modality(values, method="robust_zscore"):
+def normalize_modality(values, method):
     arr = np.asarray(values, dtype=float)
 
     if arr.size == 0:
@@ -210,41 +156,53 @@ def normalize_modality(values, method="robust_zscore"):
     raise ValueError(f"Unknown normalization method: {method}")
 
 
-def build_episode_series(ep, key, method):
-    steps, values = [], []
-    length = ep.end_idx - ep.start_idx
+def build_all_series(records) -> dict:
+    """Build normalized scalar series for all modalities from pre-loaded records."""
+    series = {k: ([], []) for k in REDUCTION_PER_KEY}
 
-    for step in range(ep.start_idx, ep.end_idx + 1):
-        path = os.path.join(INPUT_DIR, f"step_{step}.npy")
-        if not os.path.exists(path):
-            continue
-        try:
-            val = reduce_attention_scores(step, key, method)
-        except Exception:
-            continue
-        x = (step - ep.start_idx) / length if length else 0.0
-        # Uncomment out the line below if you want normalized episode progress
-        steps.append(x)
-        # steps.append(step)
-        values.append(val)
+    for t, record in records:
+        for k, method in REDUCTION_PER_KEY.items():
+            try:
+                val = _reduce(record[k][0], method)
+            except Exception as e:
+                print(f"[WARN] key {k}: {e}")
+                continue
+            series[k][0].append(t)
+            series[k][1].append(val)
 
-    return steps, values
-
-
-def build_all_series(ep, methods, norm="robust_zscore"):
-    keys = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
     all_series = {}
-
-    for k in keys:
-        s, v = build_episode_series(ep, k, methods.get(k, "average"))
-        all_series[k] = (s, normalize_modality(v, norm))
-    
+    for k, (steps, values) in series.items():
+        all_series[k] = (steps, normalize_modality(values, NORM_METHOD))
     return all_series
 
 
-def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
-    keys = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
+def build_raw_patch_series(records) -> dict:
+    """Build raw patch arrays for all modalities from pre-loaded records."""
+    keys = list(REDUCTION_PER_KEY)
+    raw = {k: [] for k in keys}
 
+    for t, record in records:
+        for k in keys:
+            try:
+                patches = np.asarray(record[k][0]).reshape(-1).astype(np.float32)
+            except Exception as e:
+                print(f"[WARN] key {k}: {e}")
+                continue
+            raw[k].append((t, patches))
+    return raw
+
+
+def _ylabel():
+    base = {
+        "zscore": "z-score",
+        "robust_zscore": "robust z-score",
+        "minmax": "min-max [0,1]",
+        "none": "raw attention",
+    }.get(NORM_METHOD, NORM_METHOD)
+    return f"Attention ({base})"
+
+
+def plot_episode_all_modalities(ep, all_series):
     if not any(len(steps) > 0 for steps, _ in all_series.values()):
         return
 
@@ -254,30 +212,19 @@ def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
     task_episode_dir = Path(OUTPUT_DIR) / task_folder / ep_folder
     task_episode_dir.mkdir(parents=True, exist_ok=True)
 
-    grouped_dir = Path(OUTPUT_DIR) / ("successes" if ep.success else "failures")
+    grouped_dir = Path(OUTPUT_DIR) / ("successes" if ep.success else "failures") / "attn"
     grouped_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = attention_plot_filename(ep, norm_code(norm), reduction_code(methods))
+    norm_str = norm_code(NORM_METHOD)
+    filename = attention_plot_filename(ep, norm_str, reduction_code(REDUCTION_PER_KEY))
 
     plt.figure(figsize=(12, 5))
-
-    for k in keys:
-        s, v = all_series[k]
+    for k, (s, v) in all_series.items():
         if s:
             plt.plot(s, v, label=short_label(k))
 
     plt.xlabel("Normalized Episode Progress")
-
-    if norm == "zscore":
-        ylabel = "Attention (z-score within episode)"
-    elif norm == "robust_zscore":
-        ylabel = "Attention (robust z-score within episode)"
-    elif norm == "minmax":
-        ylabel = "Attention (min-max within episode)"
-    else:
-        ylabel = "Attention"
-
-    plt.ylabel(ylabel)
+    plt.ylabel(_ylabel())
     plt.title(
         f"Task {ep.task_id}: {ep.task} | "
         f"Episode {ep.episode_num} | success={ep.success}\n"
@@ -286,196 +233,83 @@ def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
     plt.legend()
     plt.tight_layout()
 
-    task_episode_path = task_episode_dir / filename
-    grouped_path = grouped_dir / filename
-
-    plt.savefig(task_episode_path, dpi=150)
-    plt.savefig(grouped_path, dpi=150)
-    print(f"Saved attention plot: {task_episode_path}")
-    print(f"Also saved attention plot: {grouped_path}")
+    plt.savefig(task_episode_dir / filename, dpi=150)
+    plt.savefig(grouped_dir / filename, dpi=150)
+    print(f"Saved attention plot: {task_episode_dir / filename}")
+    print(f"Also saved attention plot: {grouped_dir / filename}")
     plt.close()
 
-def get_raw_modality_vector(step, key):
-    """
-    Returns a 1D vector for one modality at one step.
-    - image: (16, 16) -> (256,)
-    - task/state: (T,) stays (T,)
-    """
-    record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
-    vals = np.asarray(record[key], dtype=float)
-    vals = np.squeeze(vals)
-
-    if vals.ndim == 2:
-        if vals.shape != (16, 16):
-            raise ValueError(f"{key}: expected (16,16), got {vals.shape}")
-        return vals.reshape(-1)  # 256 patches
-
-    if vals.ndim == 1:
-        return vals
-
-    raise ValueError(f"{key}: expected 1D or 2D array, got shape {vals.shape}")
-
-
-def build_episode_multiline_series(ep, key):
-    steps = []
-    vectors = []
-
-    for step in range(ep.start_idx, ep.end_idx + 1):
-        path = os.path.join(INPUT_DIR, f"step_{step}.npy")
-        if not os.path.exists(path):
-            continue
-
-        try:
-            vec = get_raw_modality_vector(step, key)
-        except Exception as e:
-            print(f"Skipping step {step} for {key}: {e}")
-            continue
-
-        steps.append(step)
-        vectors.append(vec)
-
-    if not vectors:
-        return [], np.empty((0, 0))
-
-    max_dim = max(len(v) for v in vectors)
-
-    padded = np.full((len(vectors), max_dim), np.nan)
-
-    for i, v in enumerate(vectors):
-        padded[i, :len(v)] = v
-
-    return steps, padded.T  # (num_lines, num_steps)
-
-
-def plot_episode_modalities_all_lines(ep, keys=None, alpha=0.15, linewidth=0.8):
-    """
-    For one episode:
-    - image modalities: 256 lines each
-    - task/state modalities: one line per token
-    - modalities stacked vertically
-    """
-    if keys is None:
-        keys = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
-
-    series = {}
-    for k in keys:
-        steps, values = build_episode_multiline_series(ep, k)
-        series[k] = (steps, values)
-
-    if not any(len(steps) > 0 for steps, _ in series.values()):
-        return
-
-    task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
-    ep_folder = f"ep{ep.episode_num}_{'true' if ep.success else 'false'}"
-
-    task_episode_dir = Path(OUTPUT_DIR) / task_folder / ep_folder
-    task_episode_dir.mkdir(parents=True, exist_ok=True)
-
-    grouped_dir = Path(OUTPUT_DIR) / ("successes" if ep.success else "failures")
-    grouped_dir.mkdir(parents=True, exist_ok=True)
-
-    fig, axes = plt.subplots(
-        nrows=len(keys),
-        ncols=1,
-        figsize=(14, 3.5 * len(keys)),
-        sharex=True,
-        constrained_layout=True,
-    )
-
-    if len(keys) == 1:
-        axes = [axes]
-
-    for ax, k in zip(axes, keys):
-        steps, values = series[k]
-
-        if len(steps) == 0 or values.size == 0:
-            ax.set_title(f"{short_label(k)} (no data)")
-            ax.set_ylabel("Attention")
-            continue
-
-        # values shape: (num_lines, num_steps)
-        for i in range(values.shape[0]):
-            ax.plot(
-                steps,
-                values[i],
-                color="#1f77b4",
-                alpha=alpha,
-                linewidth=linewidth,
-            )
-        # mean_line = np.nanmean(values, axis=0)
-        # ax.plot(steps, mean_line, color="red", linewidth=2, label="mean")
-        # ax.legend()   
-
-        ax.set_title(f"{short_label(k)} ({values.shape[0]} lines)")
-        ax.set_ylabel("Attention")
-
-    axes[-1].set_xlabel("Step")
-
-    fig.suptitle(
-        f"Task {ep.task_id}: {ep.task} | "
-        f"Episode {ep.episode_num} | success={ep.success}\n"
-        f"Steps {ep.start_idx} to {ep.end_idx}",
-        y=1.02,
-    )
-
-    filename = f"raw_attention_all_lines_t{ep.task_id}_ep{ep.episode_num}.png"
-    task_episode_path = task_episode_dir / filename
-    grouped_path = grouped_dir / filename
-
-    plt.savefig(task_episode_path, dpi=150, bbox_inches="tight")
-    plt.savefig(grouped_path, dpi=150, bbox_inches="tight")
-    plt.close()
-
-    print(f"Saved: {task_episode_path}")
-    print(f"Also saved: {grouped_path}")
 
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
-    methods = {
-        IMG1_KEY: "average",
-        IMG2_KEY: "average",
-        TASK_KEY: "average",
-        STATE_KEY: "average",
-    }
-
-    norm = "robust_zscore"
-
     all_series_per_episode = []
+    raw_patches_per_episode = []
 
     for ep in episodes:
         print(f"Processing Episode {ep.episode_num} | success={ep.success}")
-        plot_episode_modalities_all_lines(ep)
+        records = _load_episode_records(ep)
+        all_series = build_all_series(records)
+        raw = build_raw_patch_series(records)
+
+        all_series_per_episode.append((ep, all_series))
+        raw_patches_per_episode.append((ep, raw))
+
+        plot_episode_all_modalities(ep, all_series)
+
+    # Compute global y-limits per modality (1st–99th percentile across all episodes)
+    # so that the same modality subplot uses the same scale in every episode's plot.
+    modality_keys = list(raw_patches_per_episode[0][1].keys())
+    ylim_per_key = {}
+    for k in modality_keys:
+        all_patches = np.concatenate([
+            patches
+            for _, raw in raw_patches_per_episode
+            for _, patches in raw[k]
+        ])
+        ylim_per_key[k] = (float(np.percentile(all_patches, 1)), float(np.percentile(all_patches, 99)))
+
+    for ep, raw in raw_patches_per_episode:
+        plot_patch_distribution_per_episode(
+            ep=ep,
+            raw_series=raw,
+            output_dir=OUTPUT_DIR,
+            short_label=short_label,
+            ylim_per_key=ylim_per_key,
+        )
 
     print("Done plotting individual episodes.")
     # print("Done plotting individual episodes.")
 
-    # for pct in range(1, 11, 1):
-    #     percentage = pct / 100.0
+    # 1–10% in 1% steps, then 20–100% in 10% steps
+    percentages = [p / 100.0 for p in range(1, 11)] + [p / 100.0 for p in range(20, 110, 10)]
 
-    #     results_per_episode = []
+    for percentage in percentages:
+        results_per_episode = [
+            (ep, calculate_changes_in_slope(
+                all_series=all_series,
+                short_label=short_label,
+                percentage=percentage,
+            ))
+            for ep, all_series in all_series_per_episode
+        ]
+        print(f"Plotting for first {int(percentage * 100)}% of episode")
+        plot_slope_change_per_modality(
+            results_per_episode=results_per_episode,
+            output_dir=OUTPUT_DIR,
+            percentage=percentage,
+        )
 
-    #     for ep, all_series in all_series_per_episode:
-    #         extrema_dict = calculate_extrema(
-    #         all_series=all_series,
-    #         short_label=short_label,
-    #         percentage=percentage,
-    #     )
+    plot_slope_change_scatter(
+        results_per_episode=results_per_episode,
+        output_dir=OUTPUT_DIR,
+    )
 
-    #     results_per_episode.append((ep, extrema_dict))
-
-    #     print(f"Plotting for first {pct}% of episodes")
-
-    #     plot_extrema_per_modality(
-    #         results_per_episode=results_per_episode,
-    #         output_dir=OUTPUT_DIR,
-    #         percentage=percentage,
-    #     )
-
-    # plot_extrema_scatter(
-    #     results_per_episode=results_per_episode,
-    #     output_dir=OUTPUT_DIR,
-    # )
+    plot_patch_distribution_aggregated(
+        raw_patches_per_episode=raw_patches_per_episode,
+        output_dir=OUTPUT_DIR,
+        short_label=short_label,
+    )
 
 
 if __name__ == "__main__":

@@ -31,9 +31,10 @@ def norm_code(method: str) -> str:
     }.get(method, slugify(method))
 
 
-def method_code(method: str) -> str:
+def _method_code(method: str) -> str:
     return {
         "average": "avg",
+        "median": "med",
         "sqrt_norm_sum": "sqrt",
         "sum": "sum",
         "max": "max",
@@ -44,10 +45,15 @@ def method_code(method: str) -> str:
 def reduction_code(methods: dict[str, str]) -> str:
     unique = set(methods.values())
     if len(unique) == 1:
-        return method_code(next(iter(unique)))
+        return _method_code(next(iter(unique)))
     return "mixed"
 
 
 def attention_plot_filename(ep, norm_str: str, red_str: str) -> str:
     return f"t{ep.task_id}_ep{ep.episode_num}_attn_{norm_str}_{red_str}.png"
+
+
+def patch_dist_filename(ep) -> str:
+    return f"t{ep.task_id}_ep{ep.episode_num}_patch_dist.png"
+
 
