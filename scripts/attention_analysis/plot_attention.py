@@ -224,8 +224,8 @@ def build_episode_series(ep, key, method):
             continue
         x = (step - ep.start_idx) / length if length else 0.0
         # Uncomment out the line below if you want normalized episode progress
-        # steps.append(x)
-        steps.append(step)
+        steps.append(x)
+        # steps.append(step)
         values.append(val)
 
     return steps, values
@@ -295,6 +295,140 @@ def plot_episode_all_modalities(ep, all_series, methods, norm="robust_zscore"):
     print(f"Also saved attention plot: {grouped_path}")
     plt.close()
 
+def get_raw_modality_vector(step, key):
+    """
+    Returns a 1D vector for one modality at one step.
+    - image: (16, 16) -> (256,)
+    - task/state: (T,) stays (T,)
+    """
+    record = load_record(os.path.join(INPUT_DIR, f"step_{step}.npy"))
+    vals = np.asarray(record[key], dtype=float)
+    vals = np.squeeze(vals)
+
+    if vals.ndim == 2:
+        if vals.shape != (16, 16):
+            raise ValueError(f"{key}: expected (16,16), got {vals.shape}")
+        return vals.reshape(-1)  # 256 patches
+
+    if vals.ndim == 1:
+        return vals
+
+    raise ValueError(f"{key}: expected 1D or 2D array, got shape {vals.shape}")
+
+
+def build_episode_multiline_series(ep, key):
+    steps = []
+    vectors = []
+
+    for step in range(ep.start_idx, ep.end_idx + 1):
+        path = os.path.join(INPUT_DIR, f"step_{step}.npy")
+        if not os.path.exists(path):
+            continue
+
+        try:
+            vec = get_raw_modality_vector(step, key)
+        except Exception as e:
+            print(f"Skipping step {step} for {key}: {e}")
+            continue
+
+        steps.append(step)
+        vectors.append(vec)
+
+    if not vectors:
+        return [], np.empty((0, 0))
+
+    max_dim = max(len(v) for v in vectors)
+
+    padded = np.full((len(vectors), max_dim), np.nan)
+
+    for i, v in enumerate(vectors):
+        padded[i, :len(v)] = v
+
+    return steps, padded.T  # (num_lines, num_steps)
+
+
+def plot_episode_modalities_all_lines(ep, keys=None, alpha=0.15, linewidth=0.8):
+    """
+    For one episode:
+    - image modalities: 256 lines each
+    - task/state modalities: one line per token
+    - modalities stacked vertically
+    """
+    if keys is None:
+        keys = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
+
+    series = {}
+    for k in keys:
+        steps, values = build_episode_multiline_series(ep, k)
+        series[k] = (steps, values)
+
+    if not any(len(steps) > 0 for steps, _ in series.values()):
+        return
+
+    task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
+    ep_folder = f"ep{ep.episode_num}_{'true' if ep.success else 'false'}"
+
+    task_episode_dir = Path(OUTPUT_DIR) / task_folder / ep_folder
+    task_episode_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped_dir = Path(OUTPUT_DIR) / ("successes" if ep.success else "failures")
+    grouped_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(
+        nrows=len(keys),
+        ncols=1,
+        figsize=(14, 3.5 * len(keys)),
+        sharex=True,
+        constrained_layout=True,
+    )
+
+    if len(keys) == 1:
+        axes = [axes]
+
+    for ax, k in zip(axes, keys):
+        steps, values = series[k]
+
+        if len(steps) == 0 or values.size == 0:
+            ax.set_title(f"{short_label(k)} (no data)")
+            ax.set_ylabel("Attention")
+            continue
+
+        # values shape: (num_lines, num_steps)
+        for i in range(values.shape[0]):
+            ax.plot(
+                steps,
+                values[i],
+                color="#1f77b4",
+                alpha=alpha,
+                linewidth=linewidth,
+            )
+        # mean_line = np.nanmean(values, axis=0)
+        # ax.plot(steps, mean_line, color="red", linewidth=2, label="mean")
+        # ax.legend()   
+
+        ax.set_title(f"{short_label(k)} ({values.shape[0]} lines)")
+        ax.set_ylabel("Attention")
+
+    axes[-1].set_xlabel("Step")
+
+    fig.suptitle(
+        f"Task {ep.task_id}: {ep.task} | "
+        f"Episode {ep.episode_num} | success={ep.success}\n"
+        f"Steps {ep.start_idx} to {ep.end_idx}",
+        y=1.02,
+    )
+
+    filename = f"raw_attention_all_lines_t{ep.task_id}_ep{ep.episode_num}.png"
+    task_episode_path = task_episode_dir / filename
+    grouped_path = grouped_dir / filename
+
+    plt.savefig(task_episode_path, dpi=150, bbox_inches="tight")
+    plt.savefig(grouped_path, dpi=150, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved: {task_episode_path}")
+    print(f"Also saved: {grouped_path}")
+
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
@@ -311,12 +445,10 @@ def main():
 
     for ep in episodes:
         print(f"Processing Episode {ep.episode_num} | success={ep.success}")
-        all_series = build_all_series(ep, methods, norm)
-        all_series_per_episode.append((ep, all_series))
-
-        plot_episode_all_modalities(ep, all_series, methods, norm)
+        plot_episode_modalities_all_lines(ep)
 
     print("Done plotting individual episodes.")
+    # print("Done plotting individual episodes.")
 
     # for pct in range(1, 11, 1):
     #     percentage = pct / 100.0
@@ -347,13 +479,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    # save_local_extrema_steps_from_records(
-    #     input_dir=INPUT_DIR,
-    #     key=IMG1_KEY,
-    #     output_dir=OUTPUT_DIR,
-    #     name="image1_patches",
-    # )
-
-    for i in range(1470, 1481):
-        plot_individual_image_patch_attention(step=i, key=IMG1_KEY)
+    main()
