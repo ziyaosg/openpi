@@ -1,6 +1,6 @@
 from pathlib import Path
 
-INPUT_DIR = Path("/home/annsong/Documents/policy_records_20260324_141715")
+INPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916")
 OUTPUT_DIR = INPUT_DIR / "plots"
 EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 
@@ -12,3 +12,7 @@ STATE_KEY = "outputs/debug/attr/state/scores"
 ALL_MODALITY_KEYS = [IMG1_KEY, IMG2_KEY, TASK_KEY, STATE_KEY]
 IMAGE_MODALITY_KEYS = [IMG1_KEY, IMG2_KEY]
 VECTOR_MODALITY_KEYS = [TASK_KEY, STATE_KEY]
+
+# Adjustable defaults — change these to switch behaviour globally
+REDUCTION_METHOD = "average"   # "average" | "median" | "max" | "min" | "sum" | "sqrt_norm_sum"
+NORM_METHOD = "zscore"  # "zscore" | "robust_zscore" | "minmax" | "none"

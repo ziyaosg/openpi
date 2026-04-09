@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
 import numpy as np
 import matplotlib.pyplot as plt
 
 from .constants import ALL_MODALITY_KEYS
-from .utils import load_record
-from .modality_renderers import render_modality_preview
+from .utils import compute_modality_preview_ranges
+from .modality_renderers import render_raw_attention_bar
 from ..plot_names import short_label
 
 
@@ -20,47 +19,11 @@ def _ylabel_for_norm(norm: str) -> str:
     return "Attention"
 
 
-def _compute_modality_preview_ranges(ep, input_dir, keys):
-    ranges = {}
-
-    for key in keys:
-        global_min = float("inf")
-        global_max = float("-inf")
-
-        for step in range(ep.start_idx, ep.end_idx + 1):
-            path = os.path.join(input_dir, f"step_{step}.npy")
-            if not os.path.exists(path):
-                continue
-
-            try:
-                record = load_record(path)
-                vals = np.asarray(record[key][0], dtype=float).flatten()
-            except Exception:
-                continue
-
-            if vals.size == 0:
-                continue
-
-            global_min = min(global_min, float(vals.min()))
-            global_max = max(global_max, float(vals.max()))
-
-        if global_min == float("inf") or global_max == float("-inf"):
-            ranges[key] = (0.0, 1.0)
-        else:
-            if abs(global_max - global_min) < 1e-12:
-                pad = 1e-3 if global_max == 0 else 0.05 * abs(global_max)
-            else:
-                pad = 0.05 * (global_max - global_min)
-            ranges[key] = (global_min - pad, global_max + pad)
-
-    return ranges
-
-
 def plot_episode_all_modalities_interactive(ep, input_dir, all_series, methods, norm="robust_zscore"):
     if not any(len(steps) > 0 for steps, _ in all_series.values()):
         return
 
-    preview_ranges = _compute_modality_preview_ranges(
+    preview_ranges = compute_modality_preview_ranges(
         ep=ep,
         input_dir=input_dir,
         keys=ALL_MODALITY_KEYS,
@@ -175,7 +138,7 @@ def plot_episode_all_modalities_interactive(ep, input_dir, all_series, methods, 
         annotation.set_visible(True)
 
         if state["line"] is not line or state["idx"] != idx:
-            render_modality_preview(
+            render_raw_attention_bar(
                 ax=ax_preview,
                 input_dir=input_dir,
                 step=int(round(x)),

@@ -5,6 +5,8 @@ from .constants import (
     IMG1_KEY,
     IMG2_KEY,
     INPUT_DIR,
+    NORM_METHOD,
+    REDUCTION_METHOD,
     STATE_KEY,
     TASK_KEY,
 )
@@ -15,17 +17,17 @@ from .series_builder import build_all_series
 
 def default_methods():
     return {
-        IMG1_KEY: "average",
-        IMG2_KEY: "average",
-        TASK_KEY: "average",
-        STATE_KEY: "average",
+        IMG1_KEY: REDUCTION_METHOD,
+        IMG2_KEY: REDUCTION_METHOD,
+        TASK_KEY: REDUCTION_METHOD,
+        STATE_KEY: REDUCTION_METHOD,
     }
 
 
 def run_interactive(episode_index=0):
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
     methods = default_methods()
-    norm = "robust_zscore"
+    norm = NORM_METHOD
 
     ep = episodes[episode_index]
     print(f"Opening interactive viewer for Episode {ep.episode_num} | success={ep.success}")

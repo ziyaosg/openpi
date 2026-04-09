@@ -39,10 +39,8 @@ def load_record(npy_path: str) -> dict:
 def step_path(input_dir: str | Path, step: int) -> Path:
     return Path(input_dir) / f"step_{step}.npy"
 
-def compute_modality_ranges(ep, input_dir, keys):
-    import numpy as np
-    import os
-
+def compute_modality_preview_ranges(ep, input_dir, keys):
+    """Compute per-key (min, max) ranges across an episode, with 5 % padding."""
     ranges = {}
 
     for key in keys:
@@ -50,12 +48,12 @@ def compute_modality_ranges(ep, input_dir, keys):
         global_max = float("-inf")
 
         for step in range(ep.start_idx, ep.end_idx + 1):
-            path = os.path.join(input_dir, f"step_{step}.npy")
-            if not os.path.exists(path):
+            path = step_path(input_dir, step)
+            if not path.exists():
                 continue
 
             try:
-                record = load_record(path)
+                record = load_record(str(path))
                 vals = np.asarray(record[key][0], dtype=float).flatten()
             except Exception:
                 continue
@@ -66,9 +64,13 @@ def compute_modality_ranges(ep, input_dir, keys):
             global_min = min(global_min, float(vals.min()))
             global_max = max(global_max, float(vals.max()))
 
-        if global_min == float("inf"):
-            global_min, global_max = 0.0, 1.0  # fallback
-
-        ranges[key] = (global_min, global_max)
+        if global_min == float("inf") or global_max == float("-inf"):
+            ranges[key] = (0.0, 1.0)
+        else:
+            if abs(global_max - global_min) < 1e-12:
+                pad = 1e-3 if global_max == 0 else 0.05 * abs(global_max)
+            else:
+                pad = 0.05 * (global_max - global_min)
+            ranges[key] = (global_min - pad, global_max + pad)
 
     return ranges

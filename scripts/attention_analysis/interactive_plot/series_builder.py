@@ -14,6 +14,8 @@ def reduce_attention_scores(input_dir, step, key, method="average"):
 
     if method == "average":
         return float(np.mean(vals))
+    if method == "median":
+        return float(np.median(vals))
     if method == "max":
         return float(np.max(vals))
     if method == "min":
