@@ -3,8 +3,9 @@ from __future__ import annotations
 import numpy as np
 
 from .config import IMAGE_MODALITY_KEYS, DATA_SOURCE
-from ..utils import load_record, step_path, extract_patches
-from ..plot_names import short_label
+from ...attention_utils.io import load_record, step_path
+from ...attention_utils.names import short_label
+from ...attention_utils.series import extract_patches
 
 
 def render_raw_attention_bar(ax, input_dir, step: int, key: str, y_range=None):

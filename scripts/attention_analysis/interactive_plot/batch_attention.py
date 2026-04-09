@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 from .config import ALL_MODALITY_KEYS, OUTPUT_DIR
-from ..plot_names import (
+from ...attention_utils.names import (
     attention_plot_filename,
     norm_code,
     reduction_code,

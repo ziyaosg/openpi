@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 
 from .config import ALL_MODALITY_KEYS, DATA_SOURCE
-from ..utils import load_record, step_path, reduce_vals, normalize_modality, extract_patches
+from ...attention_utils.io import load_record, step_path
+from ...attention_utils.series import extract_patches, normalize_modality, reduce_vals
 
 
 def reduce_attention_scores(input_dir, step, key, method="average"):

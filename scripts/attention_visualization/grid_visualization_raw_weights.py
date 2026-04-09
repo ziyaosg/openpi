@@ -8,7 +8,7 @@ from typing import List, Tuple
 import numpy as np
 from PIL import Image
 
-from grid_utils import (
+from grid_utils import (  # grid_utils inserts scripts/ into sys.path
     EpisodeInfo,
     load_episode_infos,
     episode_for_step,
@@ -19,8 +19,10 @@ from grid_utils import (
     resize_heatmap,
     overlay_heatmap,
     make_grid,
-    render_text_panel_from_token_scores,
 )
+from text_utils import render_text_panel_from_token_scores
+from attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES, RAW_ATTN_KEYS
+from attention_utils.series import FULL_ATTN_KEY
 
 # ============================================================
 # CONFIG
@@ -39,11 +41,6 @@ HEAD_SELECTION_LAYER = 1
 # How many top image-focused heads to include.
 TOP_K_HEADS = 3
 
-CAM_NAMES = ["right_wrist_0_rgb", "left_wrist_0_rgb"]
-CAM_IMAGE_KEYS = [
-    "inputs/observation/image",
-    "inputs/observation/wrist_image",
-]
 
 ALPHA      = 0.30
 SMOOTHING  = "BILINEAR"
@@ -114,11 +111,10 @@ def log_normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
 def process_one(npy_path: str, out_png: str) -> None:
     rec = load_record(npy_path)
 
-    full_attn_key = "outputs/debug/raw_attn/full_attn"
-    if full_attn_key not in rec:
-        raise KeyError(f"Missing {full_attn_key} in {npy_path}")
+    if FULL_ATTN_KEY not in rec:
+        raise KeyError(f"Missing {FULL_ATTN_KEY} in {npy_path}")
 
-    full_attn = np.asarray(rec[full_attn_key])
+    full_attn = np.asarray(rec[FULL_ATTN_KEY])
     if full_attn.ndim != 4:
         raise ValueError(f"{full_attn_key} expected 4D (L,B,H,S), got {full_attn.shape}")
 
@@ -133,10 +129,10 @@ def process_one(npy_path: str, out_png: str) -> None:
         cam_grids.append(tuple(int(x) for x in np.asarray(rec[grid_key]).tolist()))
 
     task_span = state_span = None
-    if "outputs/debug/raw_attn/spans/task"  in rec:
-        task_span  = tuple(int(x) for x in np.asarray(rec["outputs/debug/raw_attn/spans/task"]).tolist())
-    if "outputs/debug/raw_attn/spans/state" in rec:
-        state_span = tuple(int(x) for x in np.asarray(rec["outputs/debug/raw_attn/spans/state"]).tolist())
+    if RAW_ATTN_KEYS["task"] in rec:
+        task_span  = tuple(int(x) for x in np.asarray(rec[RAW_ATTN_KEYS["task"]]).tolist())
+    if RAW_ATTN_KEYS["state"] in rec:
+        state_span = tuple(int(x) for x in np.asarray(rec[RAW_ATTN_KEYS["state"]]).tolist())
 
     # Two-stage head selection: pick heads using HEAD_SELECTION_LAYER (early layer
     # where image/text head specialisation is stable across steps), then read the

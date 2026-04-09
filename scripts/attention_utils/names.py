@@ -7,9 +7,7 @@ def slugify(s: str, max_len: int = 120) -> str:
     s = s.strip().lower()
     s = re.sub(r"[^a-z0-9]+", "_", s)
     s = re.sub(r"_+", "_", s).strip("_")
-    if len(s) > max_len:
-        s = s[:max_len].rstrip("_")
-    return s
+    return s[:max_len].rstrip("_") if len(s) > max_len else s
 
 
 def short_label(modality_key: str) -> str:
@@ -61,5 +59,3 @@ def attention_plot_filename(ep, norm_str: str, red_str: str) -> str:
 
 def patch_dist_filename(ep) -> str:
     return f"t{ep.task_id}_ep{ep.episode_num}_patch_dist.png"
-
-

@@ -5,21 +5,22 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .analyze_attention import calculate_changes_in_slope
-from .plot_names import (
-    short_label,
-    norm_code,
-    reduction_code,
+from ..attention_utils.io import load_episode_infos, load_episode_records
+from ..attention_utils.keys import get_modality_keys
+from ..attention_utils.names import (
     attention_plot_filename,
+    norm_code,
     patch_dist_filename,
+    reduction_code,
+    short_label,
 )
-from .utils import load_episode_infos, load_episode_records, reduce_vals, normalize_modality, extract_patches
+from ..attention_utils.series import FULL_ATTN_KEY, extract_patches, normalize_modality, reduce_vals
 
 # ============================================================
 # PATHS
 # ============================================================
 INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_mdn_&_robust_zscore"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # ============================================================
@@ -27,26 +28,7 @@ EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/e
 # "gradcam"  -- use GradCAM attribution maps (outputs/debug/attr/...)
 # "raw_attn" -- use raw attention weights    (outputs/debug/raw_attn/...)
 # ============================================================
-DATA_SOURCE = "raw_attn"
-
-# ============================================================
-# MODALITY KEYS  (must match keys saved in the .npy files)
-# GradCAM keys point directly to the attribution array.
-# Raw-attn keys point to the span (start, end) into full_attn.
-# ============================================================
-_GRADCAM_KEYS = [
-    "outputs/debug/attr/image/right_wrist_0_rgb",
-    "outputs/debug/attr/image/left_wrist_0_rgb",
-    "outputs/debug/attr/task/scores",
-    "outputs/debug/attr/state/scores",
-]
-_RAW_ATTN_KEYS = [
-    "outputs/debug/raw_attn/spans/image/right_wrist_0_rgb",
-    "outputs/debug/raw_attn/spans/image/left_wrist_0_rgb",
-    "outputs/debug/raw_attn/spans/task",
-    "outputs/debug/raw_attn/spans/state",
-]
-FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
+DATA_SOURCE = "gradcam"
 
 # ============================================================
 # REDUCTION METHOD
@@ -54,9 +36,9 @@ FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
 # down to a single scalar per step.
 # Options: "average", "median", "max", "min", "sum", "sqrt_norm_sum"
 # ============================================================
-REDUCTION_METHOD_IMAGE = "median"
-REDUCTION_METHOD_TASK  = "median"
-REDUCTION_METHOD_STATE = "median"
+REDUCTION_METHOD_IMAGE = "average"
+REDUCTION_METHOD_TASK  = "average"
+REDUCTION_METHOD_STATE = "average"
 
 # ============================================================
 # NORMALIZATION METHOD
@@ -67,10 +49,10 @@ REDUCTION_METHOD_STATE = "median"
 #          "minmax"         -- scale to [0, 1]
 #          "none"           -- no normalization, raw values
 # ============================================================
-NORM_METHOD = "robust_zscore"
+NORM_METHOD = "zscore"
 
 # Derived from the variables above — do not edit directly.
-_MODALITY_KEYS = _GRADCAM_KEYS if DATA_SOURCE == "gradcam" else _RAW_ATTN_KEYS
+_MODALITY_KEYS = list(get_modality_keys(DATA_SOURCE).values())
 _REDUCTIONS = [REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_TASK, REDUCTION_METHOD_STATE]
 REDUCTION_PER_KEY = dict(zip(_MODALITY_KEYS, _REDUCTIONS))
 
@@ -110,6 +92,41 @@ def build_raw_patch_series(records) -> dict:
                 continue
             raw[k].append((t, patches))
     return raw
+
+
+def calculate_changes_in_slope(
+    *,
+    all_series,
+    short_label,
+    percentage: float = 1.0,
+    eps: float = 1e-8,
+):
+    results = {}
+
+    for modality_key, (_, values) in all_series.items():
+        arr = np.asarray(values, dtype=float)
+
+        if arr.size < 3:
+            results[short_label(modality_key)] = 0
+            continue
+
+        cutoff = max(2, int(len(arr) * percentage))
+        arr = arr[:cutoff]
+
+        slopes = np.diff(arr)
+
+        # Vectorized sign computation: ignore near-zero slopes (treat as flat)
+        raw_signs = np.sign(slopes)
+        signs = raw_signs[np.abs(slopes) > eps]
+
+        if len(signs) < 2:
+            results[short_label(modality_key)] = 0
+            continue
+
+        num_changes = int(np.sum(np.diff(signs) != 0))
+        results[short_label(modality_key)] = num_changes
+
+    return results
 
 
 def _ylabel():
@@ -300,54 +317,6 @@ def plot_patch_distribution_per_episode(
     print(f"Saved patch distribution: {grouped_dir / filename}")
 
 
-def plot_patch_distribution_aggregated(
-    *,
-    raw_patches_per_episode,
-    output_dir,
-    short_label,
-    n_bins=80,
-):
-    """
-    One figure with one subplot per modality. Each subplot shows a histogram of
-    ALL raw patch values pooled across every step of every episode.
-
-    This gives the global sparsity picture: if the distribution is heavily
-    right-skewed (spike near zero, long tail) then only a few patches per step
-    have high GradCAM values. If it is more uniform, attention is widespread.
-    """
-    modality_keys = list(raw_patches_per_episode[0][1].keys())
-    pooled = {k: [] for k in modality_keys}
-
-    for _, raw_series in raw_patches_per_episode:
-        for k, series in raw_series.items():
-            for _, patches in series:
-                pooled[k].append(patches)
-
-    n = len(modality_keys)
-    fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n))
-    if n == 1:
-        axes = [axes]
-
-    for idx, k in enumerate(modality_keys):
-        vals = np.concatenate(pooled[k]) if pooled[k] else np.empty(0)
-        lo = float(np.percentile(vals, 1))
-        hi = float(np.percentile(vals, 99))
-        axes[idx].hist(vals, bins=n_bins, range=(lo, hi), edgecolor="none")
-        axes[idx].set_xlim(lo, hi)
-        axes[idx].set_title(short_label(k))
-        axes[idx].set_xlabel("Raw patch value")
-        axes[idx].set_ylabel("Count (patches × steps × episodes)")
-
-    fig.suptitle("Raw Patch Value Distribution — Aggregated over All Steps and Episodes")
-    plt.tight_layout()
-
-    out_dir = Path(output_dir) / "slope_sign_changes"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "patch_distribution_aggregated.png"
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Saved aggregated patch distribution: {out_path}")
-
 
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
@@ -411,12 +380,6 @@ def main():
     plot_slope_change_scatter(
         results_per_episode=results_per_episode,
         output_dir=OUTPUT_DIR,
-    )
-
-    plot_patch_distribution_aggregated(
-        raw_patches_per_episode=raw_patches_per_episode,
-        output_dir=OUTPUT_DIR,
-        short_label=short_label,
     )
 
 if __name__ == "__main__":

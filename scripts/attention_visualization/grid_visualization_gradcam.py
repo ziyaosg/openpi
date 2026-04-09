@@ -8,7 +8,7 @@ from typing import List, Tuple
 import numpy as np
 from PIL import Image
 
-from grid_utils import (
+from grid_utils import (  # grid_utils inserts scripts/ into sys.path
     EpisodeInfo,
     load_episode_infos,
     episode_for_step,
@@ -19,8 +19,9 @@ from grid_utils import (
     resize_heatmap,
     overlay_heatmap,
     make_grid,
-    render_text_panel_as_image,
 )
+from text_utils import render_text_panel_as_image
+from attention_utils.keys import CAM_IMAGE_KEYS, GRADCAM_KEYS
 
 # ============================================================
 # CONFIG
@@ -29,14 +30,7 @@ INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260407_155916"
 OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/gradcam"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
-CAM_ATTR_KEYS = [
-    "outputs/debug/attr/image/right_wrist_0_rgb",
-    "outputs/debug/attr/image/left_wrist_0_rgb",
-]
-CAM_IMAGE_KEYS = [
-    "inputs/observation/image",
-    "inputs/observation/wrist_image",
-]
+CAM_ATTR_KEYS = [GRADCAM_KEYS["right_wrist"], GRADCAM_KEYS["left_wrist"]]
 
 APPLY_RELU = True
 ALPHA      = 0.30
