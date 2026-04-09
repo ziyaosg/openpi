@@ -40,6 +40,30 @@ def step_path(input_dir: str | Path, step: int) -> Path:
     return Path(input_dir) / f"step_{step}.npy"
 
 
+FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
+
+
+def extract_patches(
+    record: dict,
+    key: str,
+    data_source: str = "gradcam",
+    full_attn_key: str = FULL_ATTN_KEY,
+) -> np.ndarray:
+    """Return a flat float32 array of patch/token values for one modality at one step.
+
+    gradcam:  record[key][0] is the attribution array (batch-indexed list).
+    raw_attn: key is a span key; we average full_attn over layers & heads,
+              then slice out the modality's token range.
+    """
+    if data_source == "gradcam":
+        return np.asarray(record[key][0], dtype=np.float32).reshape(-1)
+    full_attn = np.asarray(record[full_attn_key])  # (layers, 1, heads, tokens)
+    attn = full_attn.mean(axis=(0, 2))[0]           # (tokens,)
+    span = record[key]
+    start, end = int(span[0]), int(span[1])
+    return attn[start:end].astype(np.float32)
+
+
 def reduce_vals(vals, method: str) -> float:
     vals = np.asarray(vals)
     if method == "average":
@@ -101,7 +125,7 @@ def load_episode_records(ep, input_dir) -> list:
     return records
 
 
-def compute_modality_preview_ranges(ep, input_dir, keys) -> dict:
+def compute_modality_preview_ranges(ep, input_dir, keys, data_source="gradcam") -> dict:
     """Compute per-key (min, max) ranges across an episode, with 5% padding."""
     ranges = {}
 
@@ -116,7 +140,7 @@ def compute_modality_preview_ranges(ep, input_dir, keys) -> dict:
 
             try:
                 record = load_record(str(path))
-                vals = np.asarray(record[key][0], dtype=float).flatten()
+                vals = extract_patches(record, key, data_source).astype(float)
             except Exception:
                 continue
 

@@ -7,40 +7,56 @@ import numpy as np
 
 from .analyze_attention import calculate_changes_in_slope
 from .plot_names import (
-    slugify,
     short_label,
     norm_code,
     reduction_code,
     attention_plot_filename,
     patch_dist_filename,
 )
-from .utils import load_episode_infos, load_episode_records, reduce_vals, normalize_modality
+from .utils import load_episode_infos, load_episode_records, reduce_vals, normalize_modality, extract_patches
 
 # ============================================================
 # PATHS
 # ============================================================
 INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_avg_&_zscore"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_mdn_&_robust_zscore"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # ============================================================
-# MODALITY KEYS  (must match keys saved in the .npy files)
+# DATA SOURCE
+# "gradcam"  -- use GradCAM attribution maps (outputs/debug/attr/...)
+# "raw_attn" -- use raw attention weights    (outputs/debug/raw_attn/...)
 # ============================================================
-IMG1_KEY  = "outputs/debug/attr/image/right_wrist_0_rgb"
-IMG2_KEY  = "outputs/debug/attr/image/left_wrist_0_rgb"
-TASK_KEY  = "outputs/debug/attr/task/scores"
-STATE_KEY = "outputs/debug/attr/state/scores"
+DATA_SOURCE = "raw_attn"
+
+# ============================================================
+# MODALITY KEYS  (must match keys saved in the .npy files)
+# GradCAM keys point directly to the attribution array.
+# Raw-attn keys point to the span (start, end) into full_attn.
+# ============================================================
+_GRADCAM_KEYS = [
+    "outputs/debug/attr/image/right_wrist_0_rgb",
+    "outputs/debug/attr/image/left_wrist_0_rgb",
+    "outputs/debug/attr/task/scores",
+    "outputs/debug/attr/state/scores",
+]
+_RAW_ATTN_KEYS = [
+    "outputs/debug/raw_attn/spans/image/right_wrist_0_rgb",
+    "outputs/debug/raw_attn/spans/image/left_wrist_0_rgb",
+    "outputs/debug/raw_attn/spans/task",
+    "outputs/debug/raw_attn/spans/state",
+]
+FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
 
 # ============================================================
 # REDUCTION METHOD
 # How to collapse the 2D heatmap (or 1D score array for task/state)
 # down to a single scalar per step.
 # Options: "average", "median", "max", "min", "sum", "sqrt_norm_sum"
-# Note: use "average" not "mean"
 # ============================================================
-REDUCTION_METHOD_IMAGE = "average"
-REDUCTION_METHOD_TASK  = "average"
-REDUCTION_METHOD_STATE = "average"
+REDUCTION_METHOD_IMAGE = "median"
+REDUCTION_METHOD_TASK  = "median"
+REDUCTION_METHOD_STATE = "median"
 
 # ============================================================
 # NORMALIZATION METHOD
@@ -51,16 +67,13 @@ REDUCTION_METHOD_STATE = "average"
 #          "minmax"         -- scale to [0, 1]
 #          "none"           -- no normalization, raw values
 # ============================================================
-NORM_METHOD = "zscore"
+NORM_METHOD = "robust_zscore"
 
-# Derived from the three variables above — do not edit directly.
-# Used wherever both the modality key and its reduction method are needed together.
-REDUCTION_PER_KEY = {
-    IMG1_KEY:  REDUCTION_METHOD_IMAGE,
-    IMG2_KEY:  REDUCTION_METHOD_IMAGE,
-    TASK_KEY:  REDUCTION_METHOD_TASK,
-    STATE_KEY: REDUCTION_METHOD_STATE,
-}
+# Derived from the variables above — do not edit directly.
+_MODALITY_KEYS = _GRADCAM_KEYS if DATA_SOURCE == "gradcam" else _RAW_ATTN_KEYS
+_REDUCTIONS = [REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_TASK, REDUCTION_METHOD_STATE]
+REDUCTION_PER_KEY = dict(zip(_MODALITY_KEYS, _REDUCTIONS))
+
 
 
 def build_batch_series(records) -> dict:
@@ -70,7 +83,7 @@ def build_batch_series(records) -> dict:
     for t, record in records:
         for k, method in REDUCTION_PER_KEY.items():
             try:
-                val = reduce_vals(record[k][0], method)
+                val = reduce_vals(extract_patches(record, k, DATA_SOURCE, FULL_ATTN_KEY), method)
             except Exception as e:
                 print(f"[WARN] key {k}: {e}")
                 continue
@@ -91,7 +104,7 @@ def build_raw_patch_series(records) -> dict:
     for t, record in records:
         for k in keys:
             try:
-                patches = np.asarray(record[k][0]).reshape(-1).astype(np.float32)
+                patches = extract_patches(record, k, DATA_SOURCE, FULL_ATTN_KEY)
             except Exception as e:
                 print(f"[WARN] key {k}: {e}")
                 continue
@@ -113,13 +126,7 @@ def plot_episode_all_modalities(ep, all_series):
     if not any(len(steps) > 0 for steps, _ in all_series.values()):
         return
 
-    task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
-    ep_folder = f"ep{ep.episode_num}_{'true' if ep.success else 'false'}"
-
-    task_episode_dir = Path(OUTPUT_DIR) / task_folder / ep_folder
-    task_episode_dir.mkdir(parents=True, exist_ok=True)
-
-    grouped_dir = Path(OUTPUT_DIR) / ("successes" if ep.success else "failures") / "attn"
+    grouped_dir = Path(OUTPUT_DIR) / ("attention_success" if ep.success else "attention_failure")
     grouped_dir.mkdir(parents=True, exist_ok=True)
 
     norm_str = norm_code(NORM_METHOD)
@@ -140,10 +147,8 @@ def plot_episode_all_modalities(ep, all_series):
     plt.legend()
     plt.tight_layout()
 
-    plt.savefig(task_episode_dir / filename, dpi=150)
     plt.savefig(grouped_dir / filename, dpi=150)
-    print(f"Saved attention plot: {task_episode_dir / filename}")
-    print(f"Also saved attention plot: {grouped_dir / filename}")
+    print(f"Saved attention plot: {grouped_dir / filename}")
     plt.close()
 
 
@@ -170,7 +175,7 @@ def plot_slope_change_scatter(
     plt.title("Slope Sign Changes per Episode (Green=Success, Red=Failure)")
     plt.tight_layout()
 
-    out_dir = Path(output_dir) / "analysis"
+    out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "slope_change_scatter.png"
     plt.savefig(out_path, dpi=150)
@@ -215,7 +220,7 @@ def plot_slope_change_per_modality(
     fig.suptitle(f"Slope Sign Changes per Modality (First {pct_str} of Episode)", y=1.02)
     plt.tight_layout()
 
-    out_dir = Path(output_dir) / "analysis"
+    out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"slope_changes_per_modality_{int(percentage*100)}pct.png"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -287,19 +292,12 @@ def plot_patch_distribution_per_episode(
 
     filename = patch_dist_filename(ep)
 
-    task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
-    ep_folder = f"ep{ep.episode_num}_{'true' if ep.success else 'false'}"
-    task_episode_dir = Path(output_dir) / task_folder / ep_folder
-    task_episode_dir.mkdir(parents=True, exist_ok=True)
-
-    grouped_dir = Path(output_dir) / ("successes" if ep.success else "failures") / "patch_dist"
+    grouped_dir = Path(output_dir) / ("patch_dist_success" if ep.success else "patch_dist_failure")
     grouped_dir.mkdir(parents=True, exist_ok=True)
 
-    plt.savefig(task_episode_dir / filename, dpi=150, bbox_inches="tight")
     plt.savefig(grouped_dir / filename, dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"Saved patch distribution: {task_episode_dir / filename}")
-    print(f"Also saved patch distribution: {grouped_dir / filename}")
+    print(f"Saved patch distribution: {grouped_dir / filename}")
 
 
 def plot_patch_distribution_aggregated(
@@ -343,7 +341,7 @@ def plot_patch_distribution_aggregated(
     fig.suptitle("Raw Patch Value Distribution — Aggregated over All Steps and Episodes")
     plt.tight_layout()
 
-    out_dir = Path(output_dir) / "analysis"
+    out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "patch_distribution_aggregated.png"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")

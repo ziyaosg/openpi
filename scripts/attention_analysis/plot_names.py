@@ -14,10 +14,16 @@ def slugify(s: str, max_len: int = 120) -> str:
 
 def short_label(modality_key: str) -> str:
     mapping = {
+        # GradCAM attribution keys
         "outputs/debug/attr/image/right_wrist_0_rgb": "right_wrist_rgb",
         "outputs/debug/attr/image/left_wrist_0_rgb": "left_wrist_rgb",
         "outputs/debug/attr/task/scores": "task",
         "outputs/debug/attr/state/scores": "state",
+        # Raw attention span keys
+        "outputs/debug/raw_attn/spans/image/right_wrist_0_rgb": "right_wrist_rgb",
+        "outputs/debug/raw_attn/spans/image/left_wrist_0_rgb": "left_wrist_rgb",
+        "outputs/debug/raw_attn/spans/task": "task",
+        "outputs/debug/raw_attn/spans/state": "state",
     }
     return mapping.get(modality_key, modality_key)
 

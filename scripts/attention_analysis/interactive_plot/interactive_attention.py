@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 
-from .config import ALL_MODALITY_KEYS, OUTPUT_DIR
+from .config import ALL_MODALITY_KEYS, DATA_SOURCE, OUTPUT_DIR
 from ..utils import compute_modality_preview_ranges
 from .modality_renderers import render_raw_attention_bar
 from ..plot_names import short_label
@@ -27,6 +27,7 @@ def plot_episode_all_modalities_interactive(ep, input_dir, all_series, methods, 
         ep=ep,
         input_dir=input_dir,
         keys=ALL_MODALITY_KEYS,
+        data_source=DATA_SOURCE,
     )
 
     fig = plt.figure(figsize=(14, 8))

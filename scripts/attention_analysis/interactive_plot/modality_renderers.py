@@ -2,25 +2,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from .config import IMAGE_MODALITY_KEYS
-from ..utils import load_record, step_path
+from .config import IMAGE_MODALITY_KEYS, DATA_SOURCE
+from ..utils import load_record, step_path, extract_patches
 from ..plot_names import short_label
 
 
 def render_raw_attention_bar(ax, input_dir, step: int, key: str, y_range=None):
     record = load_record(str(step_path(input_dir, step)))
-    vals = np.asarray(record[key][0], dtype=float)
+    flat_vals = extract_patches(record, key, DATA_SOURCE).astype(float)
+    x = np.arange(len(flat_vals))
 
     if key in IMAGE_MODALITY_KEYS:
-        if vals.shape != (16, 16):
-            raise ValueError(f"Expected shape (16, 16) for image modality {key}, got {vals.shape}")
-        flat_vals = vals.flatten()
-        x = np.arange(len(flat_vals))
         tick_positions = x[::16]
         tick_labels = [str(i) for i in tick_positions]
     else:
-        flat_vals = vals.flatten()
-        x = np.arange(len(flat_vals))
         tick_positions = None
         tick_labels = None
 

@@ -4,13 +4,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import ALL_MODALITY_KEYS
-from ..utils import load_record, step_path, reduce_vals, normalize_modality
+from .config import ALL_MODALITY_KEYS, DATA_SOURCE
+from ..utils import load_record, step_path, reduce_vals, normalize_modality, extract_patches
 
 
 def reduce_attention_scores(input_dir, step, key, method="average"):
     record = load_record(str(step_path(input_dir, step)))
-    vals = np.asarray(record[key][0], dtype=float)
+    vals = extract_patches(record, key, DATA_SOURCE)
     return reduce_vals(vals, method)
 
 
