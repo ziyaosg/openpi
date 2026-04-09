@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 
-from .constants import ALL_MODALITY_KEYS
+from .config import ALL_MODALITY_KEYS, OUTPUT_DIR
 from .utils import compute_modality_preview_ranges
 from .modality_renderers import render_raw_attention_bar
 from ..plot_names import short_label
@@ -80,7 +80,7 @@ def plot_episode_all_modalities_interactive(ep, input_dir, all_series, methods, 
     ax_preview.set_xlabel("Patch Index / Token Index")
     ax_preview.set_ylabel("Raw Attention")
 
-    state = {"line": None, "idx": None}
+    state = {"line": None, "idx": None, "step": None, "key": None}
 
     def nearest_hit(event):
         if event.inaxes != ax_main or event.xdata is None or event.ydata is None:
@@ -147,9 +147,28 @@ def plot_episode_all_modalities_interactive(ep, input_dir, all_series, methods, 
             )
             state["line"] = line
             state["idx"] = idx
+            state["step"] = int(round(x))
+            state["key"] = key
 
         fig.canvas.draw_idle()
 
+    def on_key(event):
+        if event.key != "s":
+            return
+        if state["step"] is None:
+            print("Nothing hovered yet — move over a point first, then press s.")
+            return
+
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        fname = (
+            f"t{ep.task_id}_ep{ep.episode_num}"
+            f"_step{state['step']}_{short_label(state['key'])}.png"
+        )
+        path = OUTPUT_DIR / fname
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"Saved: {path}")
+
     fig.canvas.mpl_connect("motion_notify_event", on_move)
+    fig.canvas.mpl_connect("key_press_event", on_key)
     plt.tight_layout()
     plt.show()

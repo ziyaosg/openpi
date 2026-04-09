@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .constants import ALL_MODALITY_KEYS
+from .config import ALL_MODALITY_KEYS
 from .utils import load_record, step_path
 
 

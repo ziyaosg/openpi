@@ -4,7 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from .constants import ALL_MODALITY_KEYS, OUTPUT_DIR
+from .config import ALL_MODALITY_KEYS, OUTPUT_DIR
 from ..plot_names import (
     attention_plot_filename,
     norm_code,

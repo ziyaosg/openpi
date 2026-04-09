@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .constants import (
+from .config import (
+    EPISODE_NUM,
     EPISODE_SUMMARIES_JSON,
     IMG1_KEY,
     IMG2_KEY,
@@ -8,6 +9,7 @@ from .constants import (
     NORM_METHOD,
     REDUCTION_METHOD,
     STATE_KEY,
+    TASK_ID,
     TASK_KEY,
 )
 from .interactive_attention import plot_episode_all_modalities_interactive
@@ -24,13 +26,24 @@ def default_methods():
     }
 
 
-def run_interactive(episode_index=0):
+def find_episode(episodes, task_id, episode_num):
+    matches = [ep for ep in episodes if ep.task_id == task_id and ep.episode_num == episode_num]
+    if not matches:
+        available = sorted({(ep.task_id, ep.episode_num) for ep in episodes})
+        raise ValueError(
+            f"No episode with task_id={task_id}, episode_num={episode_num}. "
+            f"Available (task_id, episode_num) pairs: {available}"
+        )
+    return matches[0]
+
+
+def run_interactive():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
     methods = default_methods()
     norm = NORM_METHOD
 
-    ep = episodes[episode_index]
-    print(f"Opening interactive viewer for Episode {ep.episode_num} | success={ep.success}")
+    ep = find_episode(episodes, task_id=TASK_ID, episode_num=EPISODE_NUM)
+    print(f"Opening interactive viewer for task_id={ep.task_id}, episode_num={ep.episode_num} | success={ep.success}")
 
     all_series = build_all_series(
         ep=ep,
@@ -49,4 +62,4 @@ def run_interactive(episode_index=0):
 
 
 if __name__ == "__main__":
-    run_interactive(episode_index=0)
+    run_interactive()

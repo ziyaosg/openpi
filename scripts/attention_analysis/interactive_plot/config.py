@@ -16,3 +16,7 @@ VECTOR_MODALITY_KEYS = [TASK_KEY, STATE_KEY]
 # Adjustable defaults — change these to switch behaviour globally
 REDUCTION_METHOD = "average"   # "average" | "median" | "max" | "min" | "sum" | "sqrt_norm_sum"
 NORM_METHOD = "zscore"  # "zscore" | "robust_zscore" | "minmax" | "none"
+
+# Which episode to open in interactive mode (must match episode_summaries.json)
+TASK_ID = 2
+EPISODE_NUM = 5
