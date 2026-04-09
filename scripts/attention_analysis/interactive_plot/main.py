@@ -13,7 +13,7 @@ from .config import (
     TASK_KEY,
 )
 from .interactive_attention import plot_episode_all_modalities_interactive
-from .utils import load_episode_infos
+from ..utils import load_episode_infos
 from .series_builder import build_all_series
 
 

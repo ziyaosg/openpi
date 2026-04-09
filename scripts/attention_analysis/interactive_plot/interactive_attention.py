@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from .config import ALL_MODALITY_KEYS, OUTPUT_DIR
-from .utils import compute_modality_preview_ranges
+from ..utils import compute_modality_preview_ranges
 from .modality_renderers import render_raw_attention_bar
 from ..plot_names import short_label
 

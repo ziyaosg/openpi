@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from .config import IMAGE_MODALITY_KEYS
-from .utils import load_record, step_path
+from ..utils import load_record, step_path
 from ..plot_names import short_label
 
 

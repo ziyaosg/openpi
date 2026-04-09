@@ -1,35 +1,27 @@
 from __future__ import annotations
 
-import json
-import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .analyze_attention import (
-    calculate_changes_in_slope,
-    plot_slope_change_scatter,
-    plot_slope_change_per_modality,
-    plot_patch_distribution_per_episode,
-    plot_patch_distribution_aggregated,
-)
+from .analyze_attention import calculate_changes_in_slope
 from .plot_names import (
     slugify,
     short_label,
     norm_code,
     reduction_code,
     attention_plot_filename,
+    patch_dist_filename,
 )
+from .utils import load_episode_infos, load_episode_records, reduce_vals, normalize_modality
 
 # ============================================================
 # PATHS
 # ============================================================
-INPUT_DIR = "/home/ziyao/Documents/policy_records_20260324_141715"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260324_141715/attention_analysis_mean_&_zscore"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260324_141715/episode_summaries.json"
+INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_avg_&_zscore"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # ============================================================
 # MODALITY KEYS  (must match keys saved in the .npy files)
@@ -71,99 +63,14 @@ REDUCTION_PER_KEY = {
 }
 
 
-@dataclass(frozen=True)
-class EpisodeInfo:
-    task_id: int
-    task: str
-    episode_num: int
-    success: bool
-    start_idx: int
-    end_idx: int
-
-
-def load_episode_infos(path: str) -> List[EpisodeInfo]:
-    with open(path, "r") as f:
-        data = json.load(f)
-    return [EpisodeInfo(**d) for d in data]
-
-
-def _load_record(npy_path: str) -> dict:
-    p = np.load(npy_path, allow_pickle=True)
-    if isinstance(p, np.ndarray) and p.shape == () and p.dtype == object:
-        p = p.item()
-    if not isinstance(p, dict):
-        raise TypeError(f"Expected dict in {npy_path}, got {type(p)}")
-    return p
-
-
-def _reduce(vals, method: str) -> float:
-    vals = np.asarray(vals)
-    if method == "average":
-        return float(np.mean(vals))
-    if method == "median":
-        return float(np.median(vals))
-    if method == "max":
-        return float(np.max(vals))
-    if method == "min":
-        return float(np.min(vals))
-    if method == "sum":
-        return float(np.sum(vals))
-    if method == "sqrt_norm_sum":
-        return float(np.sum(vals) / np.sqrt(vals.size))
-    raise ValueError(f"Unknown reduction method: {method}")
-
-
-def _load_episode_records(ep) -> list:
-    """Load each step's npy file exactly once. Returns list of (normalized_time, record) pairs."""
-    length = ep.end_idx - ep.start_idx
-    records = []
-    for step in range(ep.start_idx, ep.end_idx + 1):
-        path = os.path.join(INPUT_DIR, f"step_{step}.npy")
-        if not os.path.exists(path):
-            continue
-        try:
-            record = _load_record(path)
-        except Exception as e:
-            print(f"[WARN] step {step}: {e}")
-            continue
-        t = (step - ep.start_idx) / length if length else 0.0
-        records.append((t, record))
-    return records
-
-
-def normalize_modality(values, method):
-    arr = np.asarray(values, dtype=float)
-
-    if arr.size == 0:
-        return []
-
-    if method == "robust_zscore":
-        med = np.median(arr)
-        mad = np.median(np.abs(arr - med))
-        return ((arr - med) / (1.4826 * mad)).tolist() if mad > 1e-8 else np.zeros_like(arr).tolist()
-
-    if method == "zscore":
-        std = arr.std()
-        return ((arr - arr.mean()) / std).tolist() if std > 1e-8 else np.zeros_like(arr).tolist()
-
-    if method == "minmax":
-        denom = arr.max() - arr.min()
-        return ((arr - arr.min()) / denom).tolist() if denom > 1e-8 else np.zeros_like(arr).tolist()
-
-    if method == "none":
-        return arr.tolist()
-
-    raise ValueError(f"Unknown normalization method: {method}")
-
-
-def build_all_series(records) -> dict:
+def build_batch_series(records) -> dict:
     """Build normalized scalar series for all modalities from pre-loaded records."""
     series = {k: ([], []) for k in REDUCTION_PER_KEY}
 
     for t, record in records:
         for k, method in REDUCTION_PER_KEY.items():
             try:
-                val = _reduce(record[k][0], method)
+                val = reduce_vals(record[k][0], method)
             except Exception as e:
                 print(f"[WARN] key {k}: {e}")
                 continue
@@ -240,6 +147,210 @@ def plot_episode_all_modalities(ep, all_series):
     plt.close()
 
 
+def plot_slope_change_scatter(
+    *,
+    results_per_episode,
+    output_dir,
+):
+    xs, ys, colors = [], [], []
+
+    for i, (ep, slope_dict) in enumerate(results_per_episode):
+        xs.append(i)
+        ys.append(sum(slope_dict.values()))
+        colors.append("green" if ep.success else "red")
+
+    if not xs:
+        print("No data for slope change scatter plot")
+        return
+
+    plt.figure(figsize=(10, 5))
+    plt.scatter(xs, ys, c=colors)
+    plt.xlabel("Episode Index")
+    plt.ylabel("Total Slope Sign Changes")
+    plt.title("Slope Sign Changes per Episode (Green=Success, Red=Failure)")
+    plt.tight_layout()
+
+    out_dir = Path(output_dir) / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "slope_change_scatter.png"
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"Saved slope change scatter: {out_path}")
+
+
+def plot_slope_change_per_modality(
+    *,
+    results_per_episode,
+    output_dir,
+    percentage: float = 1.0,
+):
+    if not results_per_episode:
+        print("No data to plot")
+        return
+
+    if not (0 < percentage <= 1.0):
+        raise ValueError("percentage must be in (0, 1]")
+
+    modalities = list(results_per_episode[0][1].keys())
+    n = len(modalities)
+    fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=True)
+
+    if n == 1:
+        axes = [axes]
+
+    for idx, modality in enumerate(modalities):
+        xs, ys, colors = [], [], []
+        for i, (ep, slope_dict) in enumerate(results_per_episode):
+            xs.append(i)
+            ys.append(slope_dict[modality])
+            colors.append("green" if ep.success else "red")
+
+        axes[idx].scatter(xs, ys, c=colors, alpha=0.7)
+        axes[idx].set_title(modality)
+        axes[idx].set_ylabel("Sign changes")
+
+    axes[-1].set_xlabel("Episode Index")
+
+    pct_str = f"{int(percentage * 100)}%"
+    fig.suptitle(f"Slope Sign Changes per Modality (First {pct_str} of Episode)", y=1.02)
+    plt.tight_layout()
+
+    out_dir = Path(output_dir) / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"slope_changes_per_modality_{int(percentage*100)}pct.png"
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved per-modality slope scatter: {out_path}")
+
+
+def plot_patch_distribution_per_episode(
+    *,
+    ep,
+    raw_series,
+    output_dir,
+    short_label,
+    ylim_per_key=None,
+    n_time_bins=5,
+):
+    """
+    For a single episode, plot a violin for each modality showing the distribution
+    of raw patch values (all 256 patches per step, not the reduced scalar) binned
+    by normalized episode progress.
+
+    x-axis: time bin (normalized 0→1 in n_time_bins steps)
+    y-axis: raw GradCAM / score value
+    Each violin: all patch values from all steps in that time bin.
+
+    This directly answers: is attention concentrated in few patches or widespread?
+    A narrow violin spiked near zero with outliers = sparse. A wide violin = widespread.
+    """
+    modality_keys = list(raw_series.keys())
+    n = len(modality_keys)
+    bin_edges = np.linspace(0.0, 1.0, n_time_bins + 1)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_labels = [f"{lo:.1f}–{hi:.1f}" for lo, hi in zip(bin_edges[:-1], bin_edges[1:])]
+
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5), sharey=False)
+    if n == 1:
+        axes = [axes]
+
+    for idx, k in enumerate(modality_keys):
+        bins = [[] for _ in range(n_time_bins)]
+        for t, patches in raw_series[k]:
+            b = min(int(t * n_time_bins), n_time_bins - 1)
+            bins[b].append(patches)
+
+        data = [np.concatenate(b) if b else np.empty(0) for b in bins]
+        nonempty = [i for i, d in enumerate(data) if d.size > 1]
+
+        if nonempty:
+            axes[idx].violinplot(
+                [data[i] for i in nonempty],
+                positions=[bin_centers[i] for i in nonempty],
+                widths=0.8 / n_time_bins,
+                showmedians=True,
+            )
+
+        axes[idx].set_xticks(bin_centers)
+        axes[idx].set_xticklabels(bin_labels, rotation=30, ha="right")
+        axes[idx].set_xlabel("Normalized Episode Progress")
+        axes[idx].set_ylabel("Raw patch value")
+        axes[idx].set_title(short_label(k))
+        if ylim_per_key and k in ylim_per_key:
+            axes[idx].set_ylim(ylim_per_key[k])
+
+    fig.suptitle(
+        f"Raw Patch Distribution over Episode Progress\n"
+        f"Episode {ep.episode_num} | success={ep.success}"
+    )
+    plt.tight_layout()
+
+    filename = patch_dist_filename(ep)
+
+    task_folder = f"t{ep.task_id}_{slugify(ep.task)}"
+    ep_folder = f"ep{ep.episode_num}_{'true' if ep.success else 'false'}"
+    task_episode_dir = Path(output_dir) / task_folder / ep_folder
+    task_episode_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped_dir = Path(output_dir) / ("successes" if ep.success else "failures") / "patch_dist"
+    grouped_dir.mkdir(parents=True, exist_ok=True)
+
+    plt.savefig(task_episode_dir / filename, dpi=150, bbox_inches="tight")
+    plt.savefig(grouped_dir / filename, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved patch distribution: {task_episode_dir / filename}")
+    print(f"Also saved patch distribution: {grouped_dir / filename}")
+
+
+def plot_patch_distribution_aggregated(
+    *,
+    raw_patches_per_episode,
+    output_dir,
+    short_label,
+    n_bins=80,
+):
+    """
+    One figure with one subplot per modality. Each subplot shows a histogram of
+    ALL raw patch values pooled across every step of every episode.
+
+    This gives the global sparsity picture: if the distribution is heavily
+    right-skewed (spike near zero, long tail) then only a few patches per step
+    have high GradCAM values. If it is more uniform, attention is widespread.
+    """
+    modality_keys = list(raw_patches_per_episode[0][1].keys())
+    pooled = {k: [] for k in modality_keys}
+
+    for _, raw_series in raw_patches_per_episode:
+        for k, series in raw_series.items():
+            for _, patches in series:
+                pooled[k].append(patches)
+
+    n = len(modality_keys)
+    fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n))
+    if n == 1:
+        axes = [axes]
+
+    for idx, k in enumerate(modality_keys):
+        vals = np.concatenate(pooled[k]) if pooled[k] else np.empty(0)
+        lo = float(np.percentile(vals, 1))
+        hi = float(np.percentile(vals, 99))
+        axes[idx].hist(vals, bins=n_bins, range=(lo, hi), edgecolor="none")
+        axes[idx].set_xlim(lo, hi)
+        axes[idx].set_title(short_label(k))
+        axes[idx].set_xlabel("Raw patch value")
+        axes[idx].set_ylabel("Count (patches × steps × episodes)")
+
+    fig.suptitle("Raw Patch Value Distribution — Aggregated over All Steps and Episodes")
+    plt.tight_layout()
+
+    out_dir = Path(output_dir) / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "patch_distribution_aggregated.png"
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Saved aggregated patch distribution: {out_path}")
+
+
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
@@ -248,8 +359,8 @@ def main():
 
     for ep in episodes:
         print(f"Processing Episode {ep.episode_num} | success={ep.success}")
-        records = _load_episode_records(ep)
-        all_series = build_all_series(records)
+        records = load_episode_records(ep, INPUT_DIR)
+        all_series = build_batch_series(records)
         raw = build_raw_patch_series(records)
 
         all_series_per_episode.append((ep, all_series))
@@ -279,7 +390,6 @@ def main():
         )
 
     print("Done plotting individual episodes.")
-    # print("Done plotting individual episodes.")
 
     # 1–10% in 1% steps, then 20–100% in 10% steps
     percentages = [p / 100.0 for p in range(1, 11)] + [p / 100.0 for p in range(20, 110, 10)]
@@ -311,6 +421,6 @@ def main():
         short_label=short_label,
     )
 
-
 if __name__ == "__main__":
     main()
+    
