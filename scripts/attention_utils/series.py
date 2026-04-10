@@ -12,8 +12,8 @@ FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
 
 # ReLU gates — clips negative task/state attribution
 # scores when reading from already-saved npy files.
-ATTR_RELU_TASK  = True
-ATTR_RELU_STATE = True
+ATTR_RELU_TASK  = False
+ATTR_RELU_STATE = False
 
 # ── Raw-attention head-selection settings (mirrors grid_visualization_raw_weights.py) ──
 # Layer whose attention values are used for the final scores.
