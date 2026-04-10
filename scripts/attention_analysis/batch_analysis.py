@@ -10,7 +10,6 @@ from ..attention_utils.keys import get_modality_keys
 from ..attention_utils.names import (
     attention_plot_filename,
     norm_code,
-    patch_dist_filename,
     reduction_code,
     short_label,
 )
@@ -280,76 +279,6 @@ def plot_slope_change_per_modality(
     print(f"Saved per-modality slope scatter: {out_path}")
 
 
-def plot_patch_distribution_per_episode(
-    *,
-    ep,
-    raw_series,
-    output_dir,
-    short_label,
-    ylim_per_key=None,
-    n_time_bins=5,
-):
-    """
-    For a single episode, plot a violin for each modality showing the distribution
-    of raw patch values (all 256 patches per step, not the reduced scalar) binned
-    by normalized episode progress.
-
-    x-axis: time bin (normalized 0→1 in n_time_bins steps)
-    y-axis: raw GradCAM / score value
-    Each violin: all patch values from all steps in that time bin.
-
-    This directly answers: is attention concentrated in few patches or widespread?
-    A narrow violin spiked near zero with outliers = sparse. A wide violin = widespread.
-    """
-    modality_keys = list(raw_series.keys())
-    n = len(modality_keys)
-    bin_edges = np.linspace(0.0, 1.0, n_time_bins + 1)
-    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
-    bin_labels = [f"{lo:.1f}–{hi:.1f}" for lo, hi in zip(bin_edges[:-1], bin_edges[1:])]
-
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5), sharey=False)
-    if n == 1:
-        axes = [axes]
-
-    for idx, k in enumerate(modality_keys):
-        bins = [[] for _ in range(n_time_bins)]
-        for t, patches in raw_series[k]:
-            b = min(int(t * n_time_bins), n_time_bins - 1)
-            bins[b].append(patches)
-
-        data = [np.concatenate(b) if b else np.empty(0) for b in bins]
-        nonempty = [i for i, d in enumerate(data) if d.size > 1]
-
-        if nonempty:
-            axes[idx].violinplot(
-                [data[i] for i in nonempty],
-                positions=[bin_centers[i] for i in nonempty],
-                widths=0.8 / n_time_bins,
-                showmedians=True,
-            )
-
-        axes[idx].set_xticks(bin_centers)
-        axes[idx].set_xticklabels(bin_labels, rotation=30, ha="right")
-        axes[idx].set_xlabel("Normalized Episode Progress")
-        axes[idx].set_ylabel("Raw patch value")
-        axes[idx].set_title(short_label(k))
-        if ylim_per_key and k in ylim_per_key:
-            axes[idx].set_ylim(ylim_per_key[k])
-
-    fig.suptitle(
-        f"Raw Patch Distribution over Episode Progress\n"
-        f"Episode {ep.episode_num} | success={ep.success}"
-    )
-    plt.tight_layout()
-
-    filename = patch_dist_filename(ep)
-
-    grouped_dir = Path(output_dir) / ("patch_dist_success" if ep.success else "patch_dist_failure")
-    grouped_dir.mkdir(parents=True, exist_ok=True)
-
-    plt.savefig(grouped_dir / filename, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"Saved patch distribution: {grouped_dir / filename}")
 
 
 
@@ -357,41 +286,17 @@ def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
 
     all_series_per_episode = []
-    raw_patches_per_episode = []
 
     for ep in episodes:
         print(f"Processing Episode {ep.episode_num} | success={ep.success}")
         records = load_episode_records(ep, INPUT_DIR)
         all_series = build_batch_series(records)
         raw = build_raw_patch_series(records)
-
         var_series = build_variance_series(raw)
 
         all_series_per_episode.append((ep, all_series))
-        raw_patches_per_episode.append((ep, raw))
 
         plot_episode_zscore_with_variance(ep, all_series, var_series)
-
-    # Compute global y-limits per modality (1st–99th percentile across all episodes)
-    # so that the same modality subplot uses the same scale in every episode's plot.
-    modality_keys = list(raw_patches_per_episode[0][1].keys())
-    ylim_per_key = {}
-    for k in modality_keys:
-        all_patches = np.concatenate([
-            patches
-            for _, raw in raw_patches_per_episode
-            for _, patches in raw[k]
-        ])
-        ylim_per_key[k] = (float(np.percentile(all_patches, 1)), float(np.percentile(all_patches, 99)))
-
-    for ep, raw in raw_patches_per_episode:
-        plot_patch_distribution_per_episode(
-            ep=ep,
-            raw_series=raw,
-            output_dir=OUTPUT_DIR,
-            short_label=short_label,
-            ylim_per_key=ylim_per_key,
-        )
 
     print("Done plotting individual episodes.")
 
