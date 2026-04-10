@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import List, Tuple
 
 import numpy as np
 
@@ -8,6 +9,78 @@ from .io import load_record, step_path
 
 
 FULL_ATTN_KEY = "outputs/debug/raw_attn/full_attn"
+
+# ReLU gates — clips negative task/state attribution
+# scores when reading from already-saved npy files.
+ATTR_RELU_TASK  = True
+ATTR_RELU_STATE = True
+
+# ── Raw-attention head-selection settings (mirrors grid_visualization_raw_weights.py) ──
+# Layer whose attention values are used for the final scores.
+RAW_ATTN_TARGET_LAYER = 16
+# Layer used only to rank heads by image-focus (early layers are more stable).
+RAW_ATTN_HEAD_SELECTION_LAYER = 1
+# Number of top image-focused heads to include.
+RAW_ATTN_TOP_K_HEADS = 3
+
+
+def _select_heads(
+    layer_attn: np.ndarray,
+    all_img_spans: List[Tuple[int, int]],
+    task_span: Tuple[int, int] | None,
+    state_span: Tuple[int, int] | None,
+    top_k: int,
+) -> np.ndarray:
+    """Return indices of the top_k heads with the highest image/(task+state) budget ratio."""
+    H = layer_attn.shape[0]
+
+    img_budget = np.zeros(H, dtype=np.float32)
+    for s0, s1 in all_img_spans:
+        img_budget += layer_attn[:, s0:s1].sum(axis=1)
+
+    text_budget = np.zeros(H, dtype=np.float32)
+    if task_span is not None:
+        text_budget += layer_attn[:, task_span[0]:task_span[1]].sum(axis=1)
+    if state_span is not None:
+        text_budget += layer_attn[:, state_span[0]:state_span[1]].sum(axis=1)
+
+    ratio = img_budget / (text_budget + 1e-9)
+    return np.argsort(ratio)[-min(top_k, H):]
+
+
+def _extract_raw_attn_row(record: dict) -> np.ndarray:
+    """Two-stage head selection on raw attention weights.
+
+    1. Rank heads at RAW_ATTN_HEAD_SELECTION_LAYER by image/(task+state) budget.
+    2. Take element-wise max across the top-K heads at RAW_ATTN_TARGET_LAYER.
+
+    Returns a (S,) float32 array over all token positions.
+    """
+    from .keys import RAW_ATTN_KEYS, CAM_NAMES
+
+    full_attn = np.asarray(record[FULL_ATTN_KEY])  # (L, 1, H, S)
+
+    all_img_spans: List[Tuple[int, int]] = []
+    for cam_name in CAM_NAMES:
+        span_key = f"outputs/debug/raw_attn/spans/image/{cam_name}"
+        if span_key in record:
+            s = record[span_key]
+            all_img_spans.append((int(s[0]), int(s[1])))
+
+    task_span = state_span = None
+    if RAW_ATTN_KEYS["task"] in record:
+        s = record[RAW_ATTN_KEYS["task"]]
+        task_span = (int(s[0]), int(s[1]))
+    if RAW_ATTN_KEYS["state"] in record:
+        s = record[RAW_ATTN_KEYS["state"]]
+        state_span = (int(s[0]), int(s[1]))
+
+    selector_attn = full_attn[RAW_ATTN_HEAD_SELECTION_LAYER, 0, :, :]  # (H, S)
+    top_head_idx = _select_heads(selector_attn, all_img_spans, task_span, state_span, RAW_ATTN_TOP_K_HEADS)
+
+    # Element-wise max across selected heads from the target layer
+    attn_row = full_attn[RAW_ATTN_TARGET_LAYER, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
+    return attn_row.astype(np.float32)
 
 
 def extract_patches(
@@ -19,16 +92,21 @@ def extract_patches(
     """Return a flat float32 array of patch/token values for one modality at one step.
 
     gradcam:  record[key][0] is the attribution array (batch-indexed list).
-    raw_attn: key is a span key; we average full_attn over layers & heads,
-              then slice out the modality's token range.
+    raw_attn: key is a span key; head selection via _extract_raw_attn_row(), then
+              slice out the modality's token range.
     """
     if data_source == "gradcam":
-        return np.asarray(record[key][0], dtype=np.float32).reshape(-1)
-    full_attn = np.asarray(record[full_attn_key])  # (layers, 1, heads, tokens)
-    attn = full_attn.mean(axis=(0, 2))[0]           # (tokens,)
+        from .keys import GRADCAM_KEYS
+        vals = np.asarray(record[key][0], dtype=np.float32).reshape(-1)
+        if ATTR_RELU_TASK and key == GRADCAM_KEYS["task"]:
+            vals = np.maximum(vals, 0.0)
+        elif ATTR_RELU_STATE and key == GRADCAM_KEYS["state"]:
+            vals = np.maximum(vals, 0.0)
+        return vals
+    attn_row = _extract_raw_attn_row(record)
     span = record[key]
     start, end = int(span[0]), int(span[1])
-    return attn[start:end].astype(np.float32)
+    return attn_row[start:end]
 
 
 def reduce_vals(vals, method: str) -> float:

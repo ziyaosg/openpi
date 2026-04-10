@@ -20,7 +20,7 @@ from ..attention_utils.series import FULL_ATTN_KEY, extract_patches, normalize_m
 # PATHS
 # ============================================================
 INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_avg_&_zscore"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # ============================================================
@@ -28,7 +28,7 @@ EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/e
 # "gradcam"  -- use GradCAM attribution maps (outputs/debug/attr/...)
 # "raw_attn" -- use raw attention weights    (outputs/debug/raw_attn/...)
 # ============================================================
-DATA_SOURCE = "gradcam"
+DATA_SOURCE = "raw_attn"
 
 # ============================================================
 # REDUCTION METHOD
@@ -94,6 +94,70 @@ def build_raw_patch_series(records) -> dict:
     return raw
 
 
+def build_variance_series(raw_series: dict) -> dict:
+    """Per-step patch variance derived from a pre-built raw_series.
+
+    For each modality key, computes np.var across patch/token values at each
+    step, giving {key: (ts, variances)}.
+    """
+    return {
+        key: (
+            [t for t, _ in steps_patches],
+            [float(np.var(patches)) for _, patches in steps_patches],
+        )
+        for key, steps_patches in raw_series.items()
+    }
+
+
+def plot_episode_zscore_with_variance(ep, all_series, var_series):
+    modality_keys = list(REDUCTION_PER_KEY.keys())
+    n_mod = len(modality_keys)
+
+    height_ratios = [2.3] + [1.0] * n_mod
+    fig, axes = plt.subplots(
+        1 + n_mod, 1,
+        figsize=(12, 4 + 2 * n_mod),
+        gridspec_kw={"height_ratios": height_ratios, "hspace": 0.15},
+        sharex=True,
+    )
+    ax_main = axes[0]
+    ax_vars = axes[1:]
+
+    # ── Zscore line plot ──────────────────────────────────────────────────
+    colors = {}
+    for k, (s, v) in all_series.items():
+        if s:
+            (line,) = ax_main.plot(s, v, label=short_label(k))
+            colors[k] = line.get_color()
+    ax_main.set_ylabel(_ylabel())
+    ax_main.legend()
+    ax_main.tick_params(labelbottom=False)
+
+    # ── Per-modality variance bars ────────────────────────────────────────
+    for ax, k in zip(ax_vars, modality_keys):
+        ts, variances = var_series[k]
+        if ts:
+            ax.bar(ts, variances, width=1.0 / max(len(ts), 1) * 0.8, color=colors.get(k, "steelblue"), alpha=0.75)
+        ax.set_ylabel(short_label(k), fontsize=8)
+        ax.tick_params(axis="both", labelsize=7)
+        ax.tick_params(labelbottom=False)
+
+    ax_vars[-1].tick_params(labelbottom=True)
+    ax_vars[-1].set_xlabel("Normalized Episode Progress")
+    fig.text(0.02, 0.28, "Patch variance (raw)", va="center", rotation="vertical", fontsize=9)
+
+    plt.tight_layout()
+
+    grouped_dir = Path(OUTPUT_DIR) / ("attention_success" if ep.success else "attention_failure")
+    grouped_dir.mkdir(parents=True, exist_ok=True)
+
+    norm_str = norm_code(NORM_METHOD)
+    filename = attention_plot_filename(ep, norm_str, reduction_code(REDUCTION_PER_KEY))
+    plt.savefig(grouped_dir / filename, dpi=150, bbox_inches="tight")
+    print(f"Saved zscore+variance plot: {grouped_dir / filename}")
+    plt.close()
+
+
 def calculate_changes_in_slope(
     *,
     all_series,
@@ -138,35 +202,6 @@ def _ylabel():
     }.get(NORM_METHOD, NORM_METHOD)
     return f"Attention ({base})"
 
-
-def plot_episode_all_modalities(ep, all_series):
-    if not any(len(steps) > 0 for steps, _ in all_series.values()):
-        return
-
-    grouped_dir = Path(OUTPUT_DIR) / ("attention_success" if ep.success else "attention_failure")
-    grouped_dir.mkdir(parents=True, exist_ok=True)
-
-    norm_str = norm_code(NORM_METHOD)
-    filename = attention_plot_filename(ep, norm_str, reduction_code(REDUCTION_PER_KEY))
-
-    plt.figure(figsize=(12, 5))
-    for k, (s, v) in all_series.items():
-        if s:
-            plt.plot(s, v, label=short_label(k))
-
-    plt.xlabel("Normalized Episode Progress")
-    plt.ylabel(_ylabel())
-    plt.title(
-        f"Task {ep.task_id}: {ep.task} | "
-        f"Episode {ep.episode_num} | success={ep.success}\n"
-        f"Steps {ep.start_idx} to {ep.end_idx}"
-    )
-    plt.legend()
-    plt.tight_layout()
-
-    plt.savefig(grouped_dir / filename, dpi=150)
-    print(f"Saved attention plot: {grouped_dir / filename}")
-    plt.close()
 
 
 def plot_slope_change_scatter(
@@ -330,10 +365,12 @@ def main():
         all_series = build_batch_series(records)
         raw = build_raw_patch_series(records)
 
+        var_series = build_variance_series(raw)
+
         all_series_per_episode.append((ep, all_series))
         raw_patches_per_episode.append((ep, raw))
 
-        plot_episode_all_modalities(ep, all_series)
+        plot_episode_zscore_with_variance(ep, all_series, var_series)
 
     # Compute global y-limits per modality (1st–99th percentile across all episodes)
     # so that the same modality subplot uses the same scale in every episode's plot.

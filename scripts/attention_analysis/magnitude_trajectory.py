@@ -25,7 +25,7 @@ from ..attention_utils.series import extract_patches, normalize_modality, reduce
 # PATHS
 # ============================================================
 INPUT_DIR  = Path("/home/ziyao/Documents/policy_records_20260407_155916")
-OUTPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_mdn_&_robust_zscore")
+OUTPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_avg_&_zscore")
 EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 
 # ============================================================
@@ -38,10 +38,9 @@ MODALITY_KEYS = get_modality_keys(DATA_SOURCE)
 # ============================================================
 # ANALYSIS SETTINGS
 # ============================================================
-REDUCTION_METHOD = "median"
-NORM_METHOD      = "robust_zscore"
-N_TIME_BINS      = 20   # number of equal-width bins over normalized time [0, 1]
-MIN_EPISODE_STEPS = 6   # episodes shorter than this are skipped
+REDUCTION_METHOD = "average"
+NORM_METHOD      = "zscore"
+N_TIME_BINS      = 100   # number of equal-width bins over normalized time [0, 1]
 
 
 def _load_episode_scalar_series(ep) -> list[float]:
@@ -102,8 +101,6 @@ def build_trajectory_data(episodes) -> dict[str, dict[str, np.ndarray]]:
         group = "success" if ep.success else "failure"
 
         for name, scalars in raw_series.items():
-            if len(scalars) < MIN_EPISODE_STEPS:
-                continue
             norm = normalize_modality(scalars, NORM_METHOD)
             binned = _binned_magnitude(norm)
             result[name][group].append(binned)
@@ -179,9 +176,8 @@ def plot_magnitude_trajectories(trajectory_data: dict, output_dir: Path):
     )
     plt.tight_layout()
 
-    out_dir = output_dir / "magnitude_trajectory"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"magnitude_trajectory_{DATA_SOURCE}.png"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"magnitude_trajectory_{N_TIME_BINS}bins.png"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved: {out_path}")
