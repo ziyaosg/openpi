@@ -19,7 +19,7 @@ from ..attention_utils.series import FULL_ATTN_KEY, extract_patches, normalize_m
 # PATHS
 # ============================================================
 INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_avg_&_zscore"
+OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # ============================================================
@@ -27,7 +27,7 @@ EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/e
 # "gradcam"  -- use GradCAM attribution maps (outputs/debug/attr/...)
 # "raw_attn" -- use raw attention weights    (outputs/debug/raw_attn/...)
 # ============================================================
-DATA_SOURCE = "raw_attn"
+DATA_SOURCE = "gradcam"
 
 # ============================================================
 # REDUCTION METHOD
@@ -108,14 +108,16 @@ def build_variance_series(raw_series: dict) -> dict:
     }
 
 
-def plot_episode_zscore_with_variance(ep, all_series, var_series):
+def plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps: int):
     modality_keys = list(REDUCTION_PER_KEY.keys())
     n_mod = len(modality_keys)
+
+    fig_width = max(12, max_steps * 0.12)
 
     height_ratios = [2.3] + [1.0] * n_mod
     fig, axes = plt.subplots(
         1 + n_mod, 1,
-        figsize=(12, 4 + 2 * n_mod),
+        figsize=(fig_width, 4 + 2 * n_mod),
         gridspec_kw={"height_ratios": height_ratios, "hspace": 0.15},
         sharex=True,
     )
@@ -129,6 +131,7 @@ def plot_episode_zscore_with_variance(ep, all_series, var_series):
             (line,) = ax_main.plot(s, v, label=short_label(k))
             colors[k] = line.get_color()
     ax_main.set_ylabel(_ylabel())
+    ax_main.set_xlim(-0.5, max_steps - 0.5)
     ax_main.legend()
     ax_main.tick_params(labelbottom=False)
 
@@ -136,13 +139,13 @@ def plot_episode_zscore_with_variance(ep, all_series, var_series):
     for ax, k in zip(ax_vars, modality_keys):
         ts, variances = var_series[k]
         if ts:
-            ax.bar(ts, variances, width=1.0 / max(len(ts), 1) * 0.8, color=colors.get(k, "steelblue"), alpha=0.75)
+            ax.bar(ts, variances, width=0.8, color=colors.get(k, "steelblue"), alpha=0.75)
         ax.set_ylabel(short_label(k), fontsize=8)
         ax.tick_params(axis="both", labelsize=7)
         ax.tick_params(labelbottom=False)
 
     ax_vars[-1].tick_params(labelbottom=True)
-    ax_vars[-1].set_xlabel("Normalized Episode Progress")
+    ax_vars[-1].set_xlabel("Inference Step")
     fig.text(0.02, 0.28, "Patch variance (raw)", va="center", rotation="vertical", fontsize=9)
 
     plt.tight_layout()
@@ -161,7 +164,7 @@ def calculate_changes_in_slope(
     *,
     all_series,
     short_label,
-    percentage: float = 1.0,
+    n_steps: int,
     eps: float = 1e-8,
 ):
     results = {}
@@ -173,7 +176,7 @@ def calculate_changes_in_slope(
             results[short_label(modality_key)] = 0
             continue
 
-        cutoff = max(2, int(len(arr) * percentage))
+        cutoff = min(n_steps, len(arr))
         arr = arr[:cutoff]
 
         slopes = np.diff(arr)
@@ -238,14 +241,11 @@ def plot_slope_change_per_modality(
     *,
     results_per_episode,
     output_dir,
-    percentage: float = 1.0,
+    n_steps: int,
 ):
     if not results_per_episode:
         print("No data to plot")
         return
-
-    if not (0 < percentage <= 1.0):
-        raise ValueError("percentage must be in (0, 1]")
 
     modalities = list(results_per_episode[0][1].keys())
     n = len(modalities)
@@ -267,13 +267,12 @@ def plot_slope_change_per_modality(
 
     axes[-1].set_xlabel("Episode Index")
 
-    pct_str = f"{int(percentage * 100)}%"
-    fig.suptitle(f"Slope Sign Changes per Modality (First {pct_str} of Episode)", y=1.02)
+    fig.suptitle(f"Slope Sign Changes per Modality (First {n_steps} Steps)", y=1.02)
     plt.tight_layout()
 
     out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"slope_changes_per_modality_{int(percentage*100)}pct.png"
+    out_path = out_dir / f"slope_changes_per_modality_{n_steps}steps.png"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved per-modality slope scatter: {out_path}")
@@ -284,6 +283,8 @@ def plot_slope_change_per_modality(
 
 def main():
     episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
+    max_steps = max(ep.end_idx - ep.start_idx + 1 for ep in episodes)
+    print(f"Max episode length: {max_steps} steps")
 
     all_series_per_episode = []
 
@@ -296,27 +297,29 @@ def main():
 
         all_series_per_episode.append((ep, all_series))
 
-        plot_episode_zscore_with_variance(ep, all_series, var_series)
+        plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps)
 
     print("Done plotting individual episodes.")
 
-    # 1–10% in 1% steps, then 20–100% in 10% steps
-    percentages = [p / 100.0 for p in range(1, 11)] + [p / 100.0 for p in range(20, 110, 10)]
+    # 1–10 individual, then 20, 30, ... up to max_steps
+    step_counts = list(range(1, 11)) + list(range(20, max_steps + 1, 10))
+    if step_counts[-1] != max_steps:
+        step_counts.append(max_steps)
 
-    for percentage in percentages:
+    for n_steps in step_counts:
         results_per_episode = [
             (ep, calculate_changes_in_slope(
                 all_series=all_series,
                 short_label=short_label,
-                percentage=percentage,
+                n_steps=n_steps,
             ))
             for ep, all_series in all_series_per_episode
         ]
-        print(f"Plotting for first {int(percentage * 100)}% of episode")
+        print(f"Plotting for first {n_steps} steps")
         plot_slope_change_per_modality(
             results_per_episode=results_per_episode,
             output_dir=OUTPUT_DIR,
-            percentage=percentage,
+            n_steps=n_steps,
         )
 
     plot_slope_change_scatter(

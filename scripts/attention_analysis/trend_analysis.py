@@ -25,13 +25,13 @@ from ..attention_utils.series import extract_patches, normalize_modality, reduce
 # PATHS
 # ============================================================
 INPUT_DIR  = Path("/home/ziyao/Documents/policy_records_20260407_155916")
-OUTPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916/analysis_raw_attn_avg_&_zscore")
+OUTPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore")
 EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 
 # ============================================================
 # DATA SOURCE & MODALITY KEYS
 # ============================================================
-DATA_SOURCE = "raw_attn"   # "gradcam" or "raw_attn"
+DATA_SOURCE = "gradcam"   # "gradcam" or "raw_attn"
 
 MODALITY_KEYS = get_modality_keys(DATA_SOURCE)
 
@@ -64,16 +64,16 @@ def _load_episode_scalar_series(ep) -> dict[str, list[float]]:
     return series
 
 
-def _bin_zscore_magnitude(norm_series: list[float], n_time_bins: int) -> np.ndarray:
+def _bin_zscore_magnitude(norm_series: list[float], n_time_bins: int, max_steps: int) -> np.ndarray:
     """
-    Compute |zscore| binned into n_time_bins equal-width windows over [0, 1].
+    Compute |zscore| binned into n_time_bins equal-width windows over [0, max_steps].
 
     Returns array of shape (n_time_bins,) with the mean |value| per bin.
     NaN for bins with no data.
     """
     arr = np.asarray(norm_series, dtype=float)
-    t = np.linspace(0.0, 1.0, len(arr))
-    edges = np.linspace(0.0, 1.0, n_time_bins + 1)
+    t = np.arange(len(arr), dtype=float)
+    edges = np.linspace(0.0, max_steps, n_time_bins + 1)
 
     bins = np.full(n_time_bins, np.nan)
     for i in range(n_time_bins):
@@ -86,7 +86,7 @@ def _bin_zscore_magnitude(norm_series: list[float], n_time_bins: int) -> np.ndar
     return bins
 
 
-def build_trend_data(episodes, n_time_bins: int) -> dict[str, dict[str, np.ndarray]]:
+def build_trend_data(episodes, n_time_bins: int, max_steps: int) -> dict[str, dict[str, np.ndarray]]:
     """
     Returns, per modality, per group ("success" / "failure"):
         array of shape (n_episodes, n_time_bins) with binned |zscore|.
@@ -103,7 +103,7 @@ def build_trend_data(episodes, n_time_bins: int) -> dict[str, dict[str, np.ndarr
             if len(scalars) < MIN_EPISODE_STEPS:
                 continue
             norm = normalize_modality(scalars, NORM_METHOD)
-            binned = _bin_zscore_magnitude(norm, n_time_bins)
+            binned = _bin_zscore_magnitude(norm, n_time_bins, max_steps)
             result[name][group].append(binned)
 
     return {
@@ -114,9 +114,9 @@ def build_trend_data(episodes, n_time_bins: int) -> dict[str, dict[str, np.ndarr
     }
 
 
-def _mean_peak_position(matrix: np.ndarray, n_time_bins: int) -> float:
-    """Mean normalized time of the peak |magnitude| bin across episodes."""
-    bin_centers = np.linspace(0.0, 1.0, n_time_bins)
+def _mean_peak_position(matrix: np.ndarray, n_time_bins: int, max_steps: int) -> float:
+    """Mean inference step of the peak |magnitude| bin across episodes."""
+    bin_centers = np.linspace(0.0, max_steps, n_time_bins)
     peaks = []
     for row in matrix:
         if (~np.isnan(row)).any():
@@ -124,12 +124,13 @@ def _mean_peak_position(matrix: np.ndarray, n_time_bins: int) -> float:
     return float(np.mean(peaks)) if peaks else float("nan")
 
 
-def plot_trend_analysis(trend_data: dict, output_dir: Path, n_time_bins: int):
+def plot_trend_analysis(trend_data: dict, output_dir: Path, n_time_bins: int, max_steps: int):
     modalities = list(MODALITY_KEYS.keys())
     n = len(modalities)
-    bin_centers = np.linspace(0.0, 1.0, n_time_bins)
+    bin_centers = np.linspace(0.0, max_steps, n_time_bins)
 
-    fig, axes = plt.subplots(1, n, figsize=(5 * n, 4), sharey=False)
+    fig_width = max(6 * n, n_time_bins * 0.15 * n)
+    fig, axes = plt.subplots(1, n, figsize=(fig_width, 4), sharey=False)
     if n == 1:
         axes = [axes]
 
@@ -156,15 +157,15 @@ def plot_trend_analysis(trend_data: dict, output_dir: Path, n_time_bins: int):
             ax.plot(bin_centers, mean, color=color, linewidth=2, label=label)
             ax.fill_between(bin_centers, mean - sem, mean + sem, color=color, alpha=0.25)
 
-            peak = _mean_peak_position(matrix, n_time_bins)
+            peak = _mean_peak_position(matrix, n_time_bins, max_steps)
             if not np.isnan(peak):
                 ax.axvline(peak, color=color, linewidth=1.2, linestyle="--", alpha=0.7)
 
         ax.set_title(name)
-        ax.set_xlabel("Normalized episode progress")
+        ax.set_xlabel("Inference step")
         ax.set_ylabel(f"|{NORM_METHOD}| of attention")
         ax.legend(fontsize=8)
-        ax.set_xlim(0.0, 1.0)
+        ax.set_xlim(0.0, max_steps)
 
     source_label = "Raw attention weights" if DATA_SOURCE == "raw_attn" else "GradCAM"
     fig.suptitle(
@@ -188,15 +189,18 @@ def main():
           f"({sum(e.success for e in episodes)} success, "
           f"{sum(not e.success for e in episodes)} failure)")
 
+    max_steps = max(ep.end_idx - ep.start_idx + 1 for ep in episodes)
+    print(f"Max episode length: {max_steps} steps (x-axis range)")
+
     for n_time_bins in N_TIME_BINS_LIST:
         print(f"Building trend data ({n_time_bins} bins)...")
-        trend_data = build_trend_data(episodes, n_time_bins)
+        trend_data = build_trend_data(episodes, n_time_bins, max_steps)
 
         for name, groups in trend_data.items():
             for grp, mat in groups.items():
                 print(f"  {name}/{grp}: {mat.shape[0]} episodes")
 
-        plot_trend_analysis(trend_data, OUTPUT_DIR, n_time_bins)
+        plot_trend_analysis(trend_data, OUTPUT_DIR, n_time_bins, max_steps)
 
 
 if __name__ == "__main__":

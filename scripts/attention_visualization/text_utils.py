@@ -10,12 +10,12 @@ import numpy as np
 import sentencepiece
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_HERE = Path(__file__).resolve()
+sys.path.insert(0, str(_HERE.parent.parent.parent / "src"))  # src/ → openpi
 
 import openpi.shared.download as download  # noqa: E402
-from attention_utils.keys import GRADCAM_KEYS  # noqa: E402
-
-from grid_utils import jet_color  # noqa: E402
+from ..attention_utils.keys import GRADCAM_KEYS  # noqa: E402
+from .grid_utils import jet_color  # noqa: E402
 
 # ============================================================
 # RECORD KEYS FOR TEXT PANEL DATA

@@ -55,9 +55,9 @@ def episode_for_step(step: int, episodes: List[EpisodeInfo]) -> EpisodeInfo:
 
 
 def load_episode_records(ep, input_dir) -> list:
-    """Load each step's npy record for an episode. Returns list of (normalized_time, record) pairs."""
+    """Load each step's npy record for an episode. Returns list of (step_index, record) pairs,
+    where step_index is 0-based within the episode."""
     input_dir = Path(input_dir)
-    length = ep.end_idx - ep.start_idx
     records = []
     for step in range(ep.start_idx, ep.end_idx + 1):
         path = step_path(input_dir, step)
@@ -68,6 +68,6 @@ def load_episode_records(ep, input_dir) -> list:
         except Exception as e:
             print(f"[WARN] step {step}: {e}")
             continue
-        t = (step - ep.start_idx) / length if length else 0.0
+        t = step - ep.start_idx
         records.append((t, record))
     return records

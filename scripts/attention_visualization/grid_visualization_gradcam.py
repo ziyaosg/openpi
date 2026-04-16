@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import glob
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 from PIL import Image
 
-from grid_utils import (  # grid_utils inserts scripts/ into sys.path
+from .grid_utils import (
     EpisodeInfo,
     load_episode_infos,
     episode_for_step,
@@ -20,17 +20,15 @@ from grid_utils import (  # grid_utils inserts scripts/ into sys.path
     overlay_heatmap,
     make_grid,
 )
-from text_utils import render_text_panel_as_image
-from attention_utils.keys import CAM_IMAGE_KEYS, GRADCAM_KEYS
+from .text_utils import render_text_panel_as_image
+from ..attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES
 
 # ============================================================
 # CONFIG
 # ============================================================
 INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/gradcam"
+OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/heatmap_gradcam"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
-
-CAM_ATTR_KEYS = [GRADCAM_KEYS["right_wrist"], GRADCAM_KEYS["left_wrist"]]
 
 APPLY_RELU = True
 ALPHA      = 0.30
@@ -75,7 +73,8 @@ def process_one(npy_path: str, out_png: str) -> None:
     rec = load_record(npy_path)
 
     heats, imgs = [], []
-    for attr_key, img_key in zip(CAM_ATTR_KEYS, CAM_IMAGE_KEYS):
+    for cam_name, img_key in zip(CAM_NAMES, CAM_IMAGE_KEYS):
+        attr_key = f"outputs/debug/attr/image/{cam_name}"
         if attr_key not in rec:
             raise KeyError(f"Missing {attr_key} in {npy_path}")
         if img_key not in rec:

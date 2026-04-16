@@ -8,7 +8,7 @@ from typing import List, Tuple
 import numpy as np
 from PIL import Image
 
-from grid_utils import (  # grid_utils inserts scripts/ into sys.path
+from .grid_utils import (
     EpisodeInfo,
     load_episode_infos,
     episode_for_step,
@@ -20,15 +20,15 @@ from grid_utils import (  # grid_utils inserts scripts/ into sys.path
     overlay_heatmap,
     make_grid,
 )
-from text_utils import render_text_panel_from_token_scores
-from attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES, RAW_ATTN_KEYS
-from attention_utils.series import FULL_ATTN_KEY
+from .text_utils import render_text_panel_from_token_scores
+from ..attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES
+from ..attention_utils.series import FULL_ATTN_KEY
 
 # ============================================================
 # CONFIG
 # ============================================================
 INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/raw_weights"
+OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/heatmap_raw_weights"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
 
 # Layer whose attention is used for the final heatmap.
@@ -129,10 +129,10 @@ def process_one(npy_path: str, out_png: str) -> None:
         cam_grids.append(tuple(int(x) for x in np.asarray(rec[grid_key]).tolist()))
 
     task_span = state_span = None
-    if RAW_ATTN_KEYS["task"] in rec:
-        task_span  = tuple(int(x) for x in np.asarray(rec[RAW_ATTN_KEYS["task"]]).tolist())
-    if RAW_ATTN_KEYS["state"] in rec:
-        state_span = tuple(int(x) for x in np.asarray(rec[RAW_ATTN_KEYS["state"]]).tolist())
+    if "outputs/debug/raw_attn/spans/task" in rec:
+        task_span  = tuple(int(x) for x in np.asarray(rec["outputs/debug/raw_attn/spans/task"]).tolist())
+    if "outputs/debug/raw_attn/spans/state" in rec:
+        state_span = tuple(int(x) for x in np.asarray(rec["outputs/debug/raw_attn/spans/state"]).tolist())
 
     # Two-stage head selection: pick heads using HEAD_SELECTION_LAYER (early layer
     # where image/text head specialisation is stable across steps), then read the

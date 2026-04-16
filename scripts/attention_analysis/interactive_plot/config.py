@@ -14,7 +14,7 @@ EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 DATA_SOURCE = "gradcam"
 
 _KEYS = get_modality_keys(DATA_SOURCE)
-IMG1_KEY  = _KEYS["right_wrist"]
+IMG1_KEY  = _KEYS["base"]
 IMG2_KEY  = _KEYS["left_wrist"]
 TASK_KEY  = _KEYS["task"]
 STATE_KEY = _KEYS["state"]

@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 GRADCAM_KEYS: dict[str, str] = {
-    "right_wrist": "outputs/debug/attr/image/right_wrist_0_rgb",
-    "left_wrist":  "outputs/debug/attr/image/left_wrist_0_rgb",
-    "task":        "outputs/debug/attr/task/scores",
-    "state":       "outputs/debug/attr/state/scores",
+    "base":       "outputs/debug/attr/image/base_0_rgb",
+    "left_wrist": "outputs/debug/attr/image/left_wrist_0_rgb",
+    "task":       "outputs/debug/attr/task/scores",
+    "state":      "outputs/debug/attr/state/scores",
 }
 
 RAW_ATTN_KEYS: dict[str, str] = {
-    "right_wrist": "outputs/debug/raw_attn/spans/image/right_wrist_0_rgb",
-    "left_wrist":  "outputs/debug/raw_attn/spans/image/left_wrist_0_rgb",
-    "task":        "outputs/debug/raw_attn/spans/task",
-    "state":       "outputs/debug/raw_attn/spans/state",
+    "base":       "outputs/debug/raw_attn/spans/image/base_0_rgb",
+    "left_wrist": "outputs/debug/raw_attn/spans/image/left_wrist_0_rgb",
+    "task":       "outputs/debug/raw_attn/spans/task",
+    "state":      "outputs/debug/raw_attn/spans/state",
 }
 
 
 # Camera short names — used to construct span/grid record keys
-CAM_NAMES: list[str] = ["right_wrist_0_rgb", "left_wrist_0_rgb"]
+CAM_NAMES: list[str] = ["base_0_rgb", "left_wrist_0_rgb"]
 
 # Input observation image keys (same order as CAM_NAMES)
 CAM_IMAGE_KEYS: list[str] = [
