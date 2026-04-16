@@ -50,6 +50,9 @@ def _chars_and_norm(
     begin: np.ndarray,
     end: np.ndarray,
     piece_ids: List[int],
+    *,
+    strip_prefix: str = "",
+    strip_suffix: str = "",
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Expand per-token scores to per-character arrays using piece spans.
 
@@ -57,14 +60,23 @@ def _chars_and_norm(
     Each piece maps to a character range [begin[i], end[i]) in the decoded string.
     We replicate the token's score once per character so the heatmap tiles align
     with individual characters rather than subword pieces.
-    Scores are abs-valued then normalized to [0,1] within this modality.
+
+    strip_prefix/strip_suffix: literal strings at the start/end of the decoded
+    segment (e.g. "Task: " / ", ") to exclude from both visualization and
+    normalization so that punctuation doesn't affect the color scale.
+
+    Scores are abs-valued then normalized to [0,1] within the content region.
     """
     decoded = sp.decode(piece_ids)
+    content_start = len(strip_prefix)
+    content_end   = len(decoded) - len(strip_suffix) if strip_suffix else len(decoded)
+
     chars, scores = [], []
     for i, (b, e) in enumerate(zip(begin, end)):
         for j in range(int(b), int(e)):
-            chars.append(decoded[j])
-            scores.append(float(token_scores[i]))
+            if content_start <= j < content_end:
+                chars.append(decoded[j])
+                scores.append(float(token_scores[i]))
     values = np.abs(np.array(scores, dtype=np.float32))
     maxv   = float(values.max()) if values.size > 0 else 0.0
     norm   = values / maxv if maxv > 0 else np.zeros_like(values)
@@ -116,10 +128,12 @@ def _build_text_panel_image(
 def render_text_panel_as_image(obj: dict, target_height_px: int) -> Image.Image:
     """Text panel from pre-computed attribution scores (used by gradcam script)."""
     task_chars,  task_norm  = _chars_and_norm(
-        obj[TASK_SCORE_KEY][0],  obj[TASK_PIECE_BEGIN_KEY],  obj[TASK_PIECE_END_KEY],  obj[TASK_PIECE_ID_KEY].tolist()
+        obj[TASK_SCORE_KEY][0],  obj[TASK_PIECE_BEGIN_KEY],  obj[TASK_PIECE_END_KEY],  obj[TASK_PIECE_ID_KEY].tolist(),
+        strip_prefix="Task: ", strip_suffix=", ",
     )
     state_chars, state_norm = _chars_and_norm(
-        obj[STATE_SCORE_KEY][0], obj[STATE_PIECE_BEGIN_KEY], obj[STATE_PIECE_END_KEY], obj[STATE_PIECE_ID_KEY].tolist()
+        obj[STATE_SCORE_KEY][0], obj[STATE_PIECE_BEGIN_KEY], obj[STATE_PIECE_END_KEY], obj[STATE_PIECE_ID_KEY].tolist(),
+        strip_prefix="State: ", strip_suffix=";\n",
     )
     return _build_text_panel_image(task_chars, task_norm, state_chars, state_norm, target_height_px)
 
@@ -132,9 +146,11 @@ def render_text_panel_from_token_scores(
 ) -> Image.Image:
     """Text panel from raw per-token attention scores (used by raw_weights script)."""
     task_chars,  task_norm  = _chars_and_norm(
-        task_token_scores,  obj[TASK_PIECE_BEGIN_KEY],  obj[TASK_PIECE_END_KEY],  obj[TASK_PIECE_ID_KEY].tolist()
+        task_token_scores,  obj[TASK_PIECE_BEGIN_KEY],  obj[TASK_PIECE_END_KEY],  obj[TASK_PIECE_ID_KEY].tolist(),
+        strip_prefix="Task: ", strip_suffix=", ",
     )
     state_chars, state_norm = _chars_and_norm(
-        state_token_scores, obj[STATE_PIECE_BEGIN_KEY], obj[STATE_PIECE_END_KEY], obj[STATE_PIECE_ID_KEY].tolist()
+        state_token_scores, obj[STATE_PIECE_BEGIN_KEY], obj[STATE_PIECE_END_KEY], obj[STATE_PIECE_ID_KEY].tolist(),
+        strip_prefix="State: ", strip_suffix=";\n",
     )
     return _build_text_panel_image(task_chars, task_norm, state_chars, state_norm, target_height_px)
