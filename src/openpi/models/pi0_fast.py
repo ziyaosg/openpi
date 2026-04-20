@@ -555,7 +555,25 @@ class Pi0FAST(_model.BaseModel):
 
         # choose the target token for the FIRST decoded token (step 0)
         # use greedy choice to make attribution deterministic
-        target_token = jnp.argmax(last_logit, axis=-1)  # (B, 1) token id in vocab
+        action_token_0 = jnp.argmax(last_logit, axis=-1)  # (B, 1) token id in vocab
+
+        token_emb_0_for_attr = self.PaliGemma.llm(action_token_0, embed_only=True)
+        positions_0_for_attr = prefill_len[:, None] + 1
+        mask_0_for_attr = jnp.logical_and(
+            jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
+            jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
+            < (jnp.broadcast_to(prefill_size + 1, (prefix_start.shape[0], 1, 1))),
+        )
+        logit_for_token_1, _, _ = self.PaliGemma.llm(
+            embedded_prefix=token_emb_0_for_attr,
+            mask=mask_0_for_attr,
+            positions=positions_0_for_attr,
+            decode=True,
+            kv_cache=kv_cache,
+        )
+
+        # Use token_1 as the attribution target instead of token_0
+        target_token = jnp.argmax(logit_for_token_1, axis=-1)  # (B, 1)
 
         # calculate gradients
         grads = self.compute_modality_grads(
