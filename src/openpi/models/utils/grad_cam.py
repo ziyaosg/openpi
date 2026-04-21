@@ -34,3 +34,37 @@ def gradcam_from_patch_tokens(
     cam = cam.reshape((B, Hp, Wp))
 
     return cam
+
+
+def raw_alpha_from_patch_tokens(
+    grads: jnp.ndarray,          # (B, Np, D) = dY/d(patch_tokens)
+    grid_hw: Tuple[int, int],    # (Hp, Wp) with Hp*Wp == Np
+) -> jnp.ndarray:
+    """
+    Raw alpha heatmap: sum of gradients over the channel dimension per patch.
+
+    Unlike GradCAM's alpha_k (which averages over patches to get a per-channel
+    weight), this computes alpha_ij = sum_k(dY/dA^k_ij) — a scalar per patch
+    location before any activation weighting.
+
+    Returns:
+        alpha: (B, Hp, Wp)
+    """
+    B, Np, D = grads.shape
+    Hp, Wp = grid_hw
+    alpha = jnp.sum(grads, axis=-1)  # (B, Np)
+    return alpha.reshape((B, Hp, Wp))
+
+
+def raw_alpha_from_tokens(
+    grads: jnp.ndarray,  # (B, Nt, D) = dY/d(token_embeddings)
+) -> jnp.ndarray:
+    """
+    Raw alpha per token: sum of gradients over the channel dimension.
+
+    alpha_i = sum_k(dY/dA^k_i) — a scalar per token.
+
+    Returns:
+        alpha: (B, Nt)
+    """
+    return jnp.sum(grads, axis=-1)  # (B, Nt)
