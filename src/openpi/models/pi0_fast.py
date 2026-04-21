@@ -15,7 +15,7 @@ import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 
-from openpi.models.utils.grad_cam import gradcam_from_patch_tokens
+from openpi.models.utils.grad_cam import gradcam_from_patch_tokens, raw_alpha_from_patch_tokens, raw_alpha_from_tokens
 
 logger = logging.getLogger("openpi")
 
@@ -573,6 +573,7 @@ class Pi0FAST(_model.BaseModel):
         # Image Grad-CAM (per view)
         # -----------------------
         image_attr = {}
+        image_raw_alpha = {}
         for cam_name, (s0, s1) in spans["image"].items():
             patch_tokens = prefix_emb_unaligned[:, s0:s1, :]     # (B, Np, D)
             patch_grads  = grads[:, s0:s1, :]                    # (B, Np, D)
@@ -582,9 +583,11 @@ class Pi0FAST(_model.BaseModel):
                 patch_tokens,
                 patch_grads,
                 grid_hw,
-                relu=True,
+                relu=False,
             )
+            image_raw_alpha[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
         debug["attr"]["image"] = image_attr
+        debug["attr"]["image_raw_alpha"] = image_raw_alpha
 
         # normalize token lengths to Python ints for slicing
         task_token_len = observation.task_token_len
@@ -603,6 +606,7 @@ class Pi0FAST(_model.BaseModel):
         task_tokens = prefix_emb_unaligned[:, t0:t1, :]   # (B, Nt, D)
         task_grads  = grads[:, t0:t1, :]                  # (B, Nt, D)
         task_scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
+        task_raw_alpha = raw_alpha_from_tokens(task_grads)         # (B, Nt)
 
         task_token_ids = observation.tokenized_prompt[:, task_start:task_end]
 
@@ -610,9 +614,11 @@ class Pi0FAST(_model.BaseModel):
         if observation.tokenized_prompt_mask is not None:
             task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
             task_scores = task_scores * task_token_mask.astype(task_scores.dtype)
+            task_raw_alpha = task_raw_alpha * task_token_mask.astype(task_raw_alpha.dtype)
 
         debug["attr"]["task"] = {
             "scores": task_scores,
+            "raw_alpha": task_raw_alpha,
             "token_ids": task_token_ids,
             "token_mask": task_token_mask,
             "task_piece_id": observation.task_piece_id[:task_token_len],
@@ -628,6 +634,7 @@ class Pi0FAST(_model.BaseModel):
         state_tokens = prefix_emb_unaligned[:, s0:s1, :]
         state_grads  = grads[:, s0:s1, :]
         state_scores = jnp.sum(state_tokens * state_grads, axis=-1)
+        state_raw_alpha = raw_alpha_from_tokens(state_grads)         # (B, Ns)
 
         state_token_ids = observation.tokenized_prompt[:, state_start:state_end]
 
@@ -635,9 +642,11 @@ class Pi0FAST(_model.BaseModel):
         if observation.tokenized_prompt_mask is not None:
             state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
             state_scores = state_scores * state_token_mask.astype(state_scores.dtype)
+            state_raw_alpha = state_raw_alpha * state_token_mask.astype(state_raw_alpha.dtype)
 
         debug["attr"]["state"] = {
             "scores": state_scores,
+            "raw_alpha": state_raw_alpha,
             "token_ids": state_token_ids,
             "token_mask": state_token_mask,
             "state_piece_id": observation.state_piece_id[:state_token_len],
