@@ -566,22 +566,24 @@ class Pi0FAST(_model.BaseModel):
             target_token=target_token,
         )  # (B,S,D)
 
-        debug = {"gradcam": {}, "raw_alpha": {}, "tokens": {}, "attn": {}, "spans": spans}
+        debug = {"gradcam": {}, "raw_alpha": {}, "raw_alpha_norm": {}, "tokens": {}, "attn": {}, "spans": spans}
 
         # -----------------------
         # Image Grad-CAM (per view)
         # -----------------------
         gradcam_image = {}
         raw_alpha_image = {}
+        raw_alpha_norm_image = {}
         for cam_name, (s0, s1) in spans["image"].items():
             patch_tokens = prefix_emb_unaligned[:, s0:s1, :]
             patch_grads  = grads[:, s0:s1, :]
             grid_hw = meta["image_grids"][cam_name]
 
             gradcam_image[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
-            raw_alpha_image[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
+            raw_alpha_image[cam_name], raw_alpha_norm_image[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
         debug["gradcam"]["image"] = gradcam_image
         debug["raw_alpha"]["image"] = raw_alpha_image
+        debug["raw_alpha_norm"]["image"] = raw_alpha_norm_image
 
         task_token_len = observation.task_token_len
         state_token_len = observation.state_token_len
@@ -595,17 +597,19 @@ class Pi0FAST(_model.BaseModel):
 
         task_tokens = prefix_emb_unaligned[:, t0:t1, :]
         task_grads  = grads[:, t0:t1, :]
-        task_scores    = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
-        task_raw_alpha = raw_alpha_from_tokens(task_grads)            # (B, Nt)
+        task_scores              = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
+        task_raw_alpha, task_raw_alpha_norm = raw_alpha_from_tokens(task_grads)
 
         task_token_mask = None
         if observation.tokenized_prompt_mask is not None:
             task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
-            task_scores    = task_scores    * task_token_mask.astype(task_scores.dtype)
-            task_raw_alpha = task_raw_alpha * task_token_mask.astype(task_raw_alpha.dtype)
+            task_scores         = task_scores         * task_token_mask.astype(task_scores.dtype)
+            task_raw_alpha      = task_raw_alpha      * task_token_mask.astype(task_raw_alpha.dtype)
+            task_raw_alpha_norm = task_raw_alpha_norm * task_token_mask.astype(task_raw_alpha_norm.dtype)
 
         debug["gradcam"]["task"] = task_scores
         debug["raw_alpha"]["task"] = task_raw_alpha
+        debug["raw_alpha_norm"]["task"] = task_raw_alpha_norm
         debug["tokens"]["task"] = {
             "token_ids":   observation.tokenized_prompt[:, task_start:task_end],
             "token_mask":  task_token_mask,
@@ -621,17 +625,19 @@ class Pi0FAST(_model.BaseModel):
 
         state_tokens = prefix_emb_unaligned[:, s0:s1, :]
         state_grads  = grads[:, s0:s1, :]
-        state_scores    = jnp.sum(state_tokens * state_grads, axis=-1)  # (B, Ns)
-        state_raw_alpha = raw_alpha_from_tokens(state_grads)             # (B, Ns)
+        state_scores                   = jnp.sum(state_tokens * state_grads, axis=-1)  # (B, Ns)
+        state_raw_alpha, state_raw_alpha_norm = raw_alpha_from_tokens(state_grads)
 
         state_token_mask = None
         if observation.tokenized_prompt_mask is not None:
             state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
-            state_scores     = state_scores     * state_token_mask.astype(state_scores.dtype)
-            state_raw_alpha  = state_raw_alpha  * state_token_mask.astype(state_raw_alpha.dtype)
+            state_scores          = state_scores          * state_token_mask.astype(state_scores.dtype)
+            state_raw_alpha       = state_raw_alpha       * state_token_mask.astype(state_raw_alpha.dtype)
+            state_raw_alpha_norm  = state_raw_alpha_norm  * state_token_mask.astype(state_raw_alpha_norm.dtype)
 
         debug["gradcam"]["state"] = state_scores
         debug["raw_alpha"]["state"] = state_raw_alpha
+        debug["raw_alpha_norm"]["state"] = state_raw_alpha_norm
         debug["tokens"]["state"] = {
             "token_ids":   observation.tokenized_prompt[:, state_start:state_end],
             "token_mask":  state_token_mask,
@@ -679,19 +685,23 @@ class Pi0FAST(_model.BaseModel):
         # Trim both to prefix length.
         # attn_rows: [L, B, H, S_cache] -> [L, B, H, S_prefix]
         # v_cache:   [L, B, S_cache, K, D_head] -> [L, B, S_prefix, K, D_head]
-        attn_weights = out_step0["attn_rows"][:, :, :, :prefill_size]
-        v_trimmed    = out_step0["v_cache"][:, :, :prefill_size, :, :]
+        # Layer 1: stable head-selection layer (image-focused heads rank consistently).
+        # Layer 16: sharp spatial concentration for the actual heatmap values.
+        ATTN_LAYERS = jnp.array([1, 16])
+        attn_weights = out_step0["attn_rows"][ATTN_LAYERS, :, :, :prefill_size]
+        v_trimmed    = out_step0["v_cache"][ATTN_LAYERS, :, :prefill_size, :, :]
 
         # Expand K -> H via GQA repeat so V aligns with attn_weights head-for-head.
         # gemma_2b: K=num_kv_heads=1, H=num_heads=8, G=8
         H = attn_weights.shape[2]
         K = v_trimmed.shape[3]
         G = H // K
-        v = jnp.repeat(v_trimmed, G, axis=3)  # [L, B, S_prefix, H, D_head]
+        v = jnp.repeat(v_trimmed, G, axis=3)  # [2, B, S_prefix, H, D_head]
 
         debug["attn"] = {
-            "weights": attn_weights,  # [L, B, H, S_prefix]
-            "v":       v,             # [L, B, S_prefix, H, D_head]
+            "weights": attn_weights,  # [2, B, H, S_prefix]
+            "v":       v,             # [2, B, S_prefix, H, D_head]
+            "layers":  ATTN_LAYERS,   # [1, 16]
         }
 
         # ---------------------------------------------------------------
