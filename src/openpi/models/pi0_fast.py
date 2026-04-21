@@ -566,7 +566,7 @@ class Pi0FAST(_model.BaseModel):
             target_token=target_token,
         )  # (B,S,D)
 
-        debug = {"gradcam": {}, "raw_alpha": {}, "raw_alpha_norm": {}, "tokens": {}, "attn": {}, "spans": spans}
+        debug = {"gradcam": {}, "raw_alpha": {"summation": {}, "norm": {}}, "tokens": {}, "attn": {}, "spans": spans}
 
         # -----------------------
         # Image Grad-CAM (per view)
@@ -582,8 +582,8 @@ class Pi0FAST(_model.BaseModel):
             gradcam_image[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
             raw_alpha_image[cam_name], raw_alpha_norm_image[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
         debug["gradcam"]["image"] = gradcam_image
-        debug["raw_alpha"]["image"] = raw_alpha_image
-        debug["raw_alpha_norm"]["image"] = raw_alpha_norm_image
+        debug["raw_alpha"]["summation"]["image"] = raw_alpha_image
+        debug["raw_alpha"]["norm"]["image"] = raw_alpha_norm_image
 
         task_token_len = observation.task_token_len
         state_token_len = observation.state_token_len
@@ -608,8 +608,8 @@ class Pi0FAST(_model.BaseModel):
             task_raw_alpha_norm = task_raw_alpha_norm * task_token_mask.astype(task_raw_alpha_norm.dtype)
 
         debug["gradcam"]["task"] = task_scores
-        debug["raw_alpha"]["task"] = task_raw_alpha
-        debug["raw_alpha_norm"]["task"] = task_raw_alpha_norm
+        debug["raw_alpha"]["summation"]["task"] = task_raw_alpha
+        debug["raw_alpha"]["norm"]["task"] = task_raw_alpha_norm
         debug["tokens"]["task"] = {
             "token_ids":   observation.tokenized_prompt[:, task_start:task_end],
             "token_mask":  task_token_mask,
@@ -636,8 +636,8 @@ class Pi0FAST(_model.BaseModel):
             state_raw_alpha_norm  = state_raw_alpha_norm  * state_token_mask.astype(state_raw_alpha_norm.dtype)
 
         debug["gradcam"]["state"] = state_scores
-        debug["raw_alpha"]["state"] = state_raw_alpha
-        debug["raw_alpha_norm"]["state"] = state_raw_alpha_norm
+        debug["raw_alpha"]["summation"]["state"] = state_raw_alpha
+        debug["raw_alpha"]["norm"]["state"] = state_raw_alpha_norm
         debug["tokens"]["state"] = {
             "token_ids":   observation.tokenized_prompt[:, state_start:state_end],
             "token_mask":  state_token_mask,
