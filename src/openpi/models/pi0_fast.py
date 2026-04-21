@@ -681,17 +681,17 @@ class Pi0FAST(_model.BaseModel):
             kv_cache=kv_cache,
         )
 
-        # attn_rows_step0 comes directly from the transformer output.
-        # Shape: [num_layers, B, H, S_cache]
+        # attn_rows_step0: [num_layers, B, H, S_cache] — raw softmax weights
         attn_rows_step0 = out_step0["attn_rows"]
+        # z_rows_step0: [num_layers, B, H, D_head] — Attention(Q,K,V) = WV
+        z_rows_step0 = out_step0["z_rows"]
 
-        # Full attention matrix: all layers, all heads, trimmed to prefix length.
-        # Shape: [num_layers, B, H, S_prefix] — raw softmax weights, no aggregation.
-        # The visualization script chooses layer, head aggregation, and normalization.
-        attn_full = attn_rows_step0[:, :, :, :prefill_size]               # [L, B, H, S_prefix]
+        # Trim to prefix length.
+        attn_full = attn_rows_step0[:, :, :, :prefill_size]  # [L, B, H, S_prefix]
 
         debug["raw_attn"] = {
-            "full_attn": attn_full,
+            "full_attn": attn_full,          # [L, B, H, S_prefix] — softmax weights
+            "z_full": z_rows_step0,          # [L, B, H, D_head]   — Attention(Q,K,V)
             "spans": spans,
         }
 
