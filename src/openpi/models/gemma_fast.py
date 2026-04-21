@@ -238,9 +238,8 @@ class Attention(nn.Module):
         # In the prefix prefill call, this row is the one whose logit predicts
         # the first decoded action token.
         attn_last_row = probs_full[:, :, -1, :]    # [B, H, S]
-        z_last_row = encoded[:, -1, :, :]           # [B, H, D_head] — Attention(Q,K,V) at last query pos
 
-        return attn_output, kv_cache, attn_last_row, z_last_row
+        return attn_output, kv_cache, attn_last_row
 
 
 @at.typecheck
@@ -284,7 +283,7 @@ class Block(nn.Module):
         # Standard pre-attention normalization
         inputs_normalized = self.pre_attention_norm(x)
 
-        attn_output, kv_cache, attn_last_row, z_last_row = self.attn(
+        attn_output, kv_cache, attn_last_row = self.attn(
             inputs_normalized, positions, attn_mask, kv_cache, decode, deterministic
         )
 
@@ -299,10 +298,9 @@ class Block(nn.Module):
         outputs = self.drop(outputs, deterministic)
         outputs = residual + outputs
 
-        # Scan stacks (kv_cache, attn_last_row, z_last_row) across all depth layers.
-        # attn_last_row: [B, H, S]        — raw softmax weights at last query pos
-        # z_last_row:    [B, H, D_head]   — Attention(Q,K,V) at last query pos
-        return outputs, (kv_cache, attn_last_row, z_last_row)
+        # Scan stacks (kv_cache, attn_last_row) across all depth layers.
+        # attn_last_row: [B, H, S] — softmax weights at last query pos
+        return outputs, (kv_cache, attn_last_row)
 
 
 KVCache: TypeAlias = tuple[at.Int[at.Array, " b"], at.Float[at.Array, "b _t _k _h"], at.Float[at.Array, "b _t _v _h"]]
@@ -438,15 +436,15 @@ class Module(nn.Module):
         ]
 
         for block in blocks:
-            # The scan stacks (kv_cache, attn_last_row, z_last_row) across all depth layers.
-            # attn_rows shape after scan: [depth, B, H, S]
-            # z_rows shape after scan:    [depth, B, H, D_head]
-            x, (kv_cache, attn_rows, z_rows) = block(x, kv_cache, positions, mask, decode, deterministic)
+            # Scan stacks (kv_cache, attn_rows) across all depth layers.
+            # kv_cache[2] after scan: [depth, B, S_cache, num_kv_heads, head_dim]
+            # attn_rows after scan:   [depth, B, H, S]
+            x, (kv_cache, attn_rows) = block(x, kv_cache, positions, mask, decode, deterministic)
 
         assert x.dtype == jnp.dtype(self.embed_dtype)  # Sanity check.
         out["encoded"] = x
-        out["attn_rows"] = attn_rows  # [depth, B, H, S]       — raw softmax weights per layer
-        out["z_rows"] = z_rows        # [depth, B, H, D_head]  — Attention(Q,K,V) per layer
+        out["attn_rows"] = attn_rows   # [depth, B, H, S]
+        out["v_cache"] = kv_cache[2]   # [depth, B, S_cache, num_kv_heads, head_dim]
 
         x = RMSNorm(name="final_norm")(x)
         out["pre_logits"] = x

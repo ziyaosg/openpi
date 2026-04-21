@@ -566,64 +566,52 @@ class Pi0FAST(_model.BaseModel):
             target_token=target_token,
         )  # (B,S,D)
 
-        # collect attributions into a single debug payload
-        debug = {"attr": {}, "spans": spans, "meta": meta}
+        debug = {"gradcam": {}, "raw_alpha": {}, "tokens": {}, "attn": {}, "spans": spans}
 
         # -----------------------
         # Image Grad-CAM (per view)
         # -----------------------
-        image_attr = {}
-        image_raw_alpha = {}
+        gradcam_image = {}
+        raw_alpha_image = {}
         for cam_name, (s0, s1) in spans["image"].items():
-            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]     # (B, Np, D)
-            patch_grads  = grads[:, s0:s1, :]                    # (B, Np, D)
-            grid_hw = meta["image_grids"][cam_name]              # (Hp, Wp)
+            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]
+            patch_grads  = grads[:, s0:s1, :]
+            grid_hw = meta["image_grids"][cam_name]
 
-            image_attr[cam_name] = gradcam_from_patch_tokens(
-                patch_tokens,
-                patch_grads,
-                grid_hw,
-                relu=False,
-            )
-            image_raw_alpha[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
-        debug["attr"]["image"] = image_attr
-        debug["attr"]["image_raw_alpha"] = image_raw_alpha
+            gradcam_image[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
+            raw_alpha_image[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
+        debug["gradcam"]["image"] = gradcam_image
+        debug["raw_alpha"]["image"] = raw_alpha_image
 
-        # normalize token lengths to Python ints for slicing
         task_token_len = observation.task_token_len
         state_token_len = observation.state_token_len
-
-        task_start = 0
-        task_end = task_token_len
-        state_start = task_end
-        state_end = state_start + state_token_len
+        task_start, task_end = 0, task_token_len
+        state_start, state_end = task_end, task_end + state_token_len
 
         # -----------------------
         # Task attribution (per token)
         # -----------------------
         t0, t1 = spans["task"]
 
-        task_tokens = prefix_emb_unaligned[:, t0:t1, :]   # (B, Nt, D)
-        task_grads  = grads[:, t0:t1, :]                  # (B, Nt, D)
-        task_scores = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
-        task_raw_alpha = raw_alpha_from_tokens(task_grads)         # (B, Nt)
-
-        task_token_ids = observation.tokenized_prompt[:, task_start:task_end]
+        task_tokens = prefix_emb_unaligned[:, t0:t1, :]
+        task_grads  = grads[:, t0:t1, :]
+        task_scores    = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
+        task_raw_alpha = raw_alpha_from_tokens(task_grads)            # (B, Nt)
 
         task_token_mask = None
         if observation.tokenized_prompt_mask is not None:
             task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
-            task_scores = task_scores * task_token_mask.astype(task_scores.dtype)
+            task_scores    = task_scores    * task_token_mask.astype(task_scores.dtype)
             task_raw_alpha = task_raw_alpha * task_token_mask.astype(task_raw_alpha.dtype)
 
-        debug["attr"]["task"] = {
-            "scores": task_scores,
-            "raw_alpha": task_raw_alpha,
-            "token_ids": task_token_ids,
-            "token_mask": task_token_mask,
-            "task_piece_id": observation.task_piece_id[:task_token_len],
-            "task_piece_begin": observation.task_piece_begin[:task_token_len],
-            "task_piece_end": observation.task_piece_end[:task_token_len],
+        debug["gradcam"]["task"] = task_scores
+        debug["raw_alpha"]["task"] = task_raw_alpha
+        debug["tokens"]["task"] = {
+            "token_ids":   observation.tokenized_prompt[:, task_start:task_end],
+            "token_mask":  task_token_mask,
+            "piece_id":    observation.task_piece_id[:task_token_len],
+            "piece_begin": observation.task_piece_begin[:task_token_len],
+            "piece_end":   observation.task_piece_end[:task_token_len],
         }
 
         # -----------------------
@@ -633,25 +621,23 @@ class Pi0FAST(_model.BaseModel):
 
         state_tokens = prefix_emb_unaligned[:, s0:s1, :]
         state_grads  = grads[:, s0:s1, :]
-        state_scores = jnp.sum(state_tokens * state_grads, axis=-1)
-        state_raw_alpha = raw_alpha_from_tokens(state_grads)         # (B, Ns)
-
-        state_token_ids = observation.tokenized_prompt[:, state_start:state_end]
+        state_scores    = jnp.sum(state_tokens * state_grads, axis=-1)  # (B, Ns)
+        state_raw_alpha = raw_alpha_from_tokens(state_grads)             # (B, Ns)
 
         state_token_mask = None
         if observation.tokenized_prompt_mask is not None:
             state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
-            state_scores = state_scores * state_token_mask.astype(state_scores.dtype)
-            state_raw_alpha = state_raw_alpha * state_token_mask.astype(state_raw_alpha.dtype)
+            state_scores     = state_scores     * state_token_mask.astype(state_scores.dtype)
+            state_raw_alpha  = state_raw_alpha  * state_token_mask.astype(state_raw_alpha.dtype)
 
-        debug["attr"]["state"] = {
-            "scores": state_scores,
-            "raw_alpha": state_raw_alpha,
-            "token_ids": state_token_ids,
-            "token_mask": state_token_mask,
-            "state_piece_id": observation.state_piece_id[:state_token_len],
-            "state_piece_begin": observation.state_piece_begin[:state_token_len],
-            "state_piece_end": observation.state_piece_end[:state_token_len],
+        debug["gradcam"]["state"] = state_scores
+        debug["raw_alpha"]["state"] = state_raw_alpha
+        debug["tokens"]["state"] = {
+            "token_ids":   observation.tokenized_prompt[:, state_start:state_end],
+            "token_mask":  state_token_mask,
+            "piece_id":    observation.state_piece_id[:state_token_len],
+            "piece_begin": observation.state_piece_begin[:state_token_len],
+            "piece_end":   observation.state_piece_end[:state_token_len],
         }
         
         
@@ -690,18 +676,22 @@ class Pi0FAST(_model.BaseModel):
             kv_cache=kv_cache,
         )
 
-        # attn_rows_step0: [num_layers, B, H, S_cache] — raw softmax weights
-        attn_rows_step0 = out_step0["attn_rows"]
-        # z_rows_step0: [num_layers, B, H, D_head] — Attention(Q,K,V) = WV
-        z_rows_step0 = out_step0["z_rows"]
+        # Trim both to prefix length.
+        # attn_rows: [L, B, H, S_cache] -> [L, B, H, S_prefix]
+        # v_cache:   [L, B, S_cache, K, D_head] -> [L, B, S_prefix, K, D_head]
+        attn_weights = out_step0["attn_rows"][:, :, :, :prefill_size]
+        v_trimmed    = out_step0["v_cache"][:, :, :prefill_size, :, :]
 
-        # Trim to prefix length.
-        attn_full = attn_rows_step0[:, :, :, :prefill_size]  # [L, B, H, S_prefix]
+        # Expand K -> H via GQA repeat so V aligns with attn_weights head-for-head.
+        # gemma_2b: K=num_kv_heads=1, H=num_heads=8, G=8
+        H = attn_weights.shape[2]
+        K = v_trimmed.shape[3]
+        G = H // K
+        v = jnp.repeat(v_trimmed, G, axis=3)  # [L, B, S_prefix, H, D_head]
 
-        debug["raw_attn"] = {
-            "full_attn": attn_full,          # [L, B, H, S_prefix] — softmax weights
-            "z_full": z_rows_step0,          # [L, B, H, D_head]   — Attention(Q,K,V)
-            "spans": spans,
+        debug["attn"] = {
+            "weights": attn_weights,  # [L, B, H, S_prefix]
+            "v":       v,             # [L, B, S_prefix, H, D_head]
         }
 
         # ---------------------------------------------------------------
@@ -748,6 +738,4 @@ class Pi0FAST(_model.BaseModel):
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
             cond, step, (rng, last_logit_1, output_tokens, kv_cache_1, all_eos_0, 1)
         )
-        if debug is not None:
-            return output_tokens, debug
-        return output_tokens, None
+        return output_tokens, debug
