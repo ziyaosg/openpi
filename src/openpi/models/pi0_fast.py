@@ -691,16 +691,9 @@ class Pi0FAST(_model.BaseModel):
         attn_weights = out_step0["attn_rows"][ATTN_LAYERS, :, :, :prefill_size]
         v_trimmed    = out_step0["v_cache"][ATTN_LAYERS, :, :prefill_size, :, :]
 
-        # Expand K -> H via GQA repeat so V aligns with attn_weights head-for-head.
-        # gemma_2b: K=num_kv_heads=1, H=num_heads=8, G=8
-        H = attn_weights.shape[2]
-        K = v_trimmed.shape[3]
-        G = H // K
-        v = jnp.repeat(v_trimmed, G, axis=3)  # [2, B, S_prefix, H, D_head]
-
         debug["attn"] = {
             "weights": attn_weights,  # [2, B, H, S_prefix]
-            "v":       v,             # [2, B, S_prefix, H, D_head]
+            "v":       v_trimmed,     # [2, B, S_prefix, K, D_head]  K=1 for gemma_2b GQA
             "layers":  ATTN_LAYERS,   # [1, 16]
         }
 

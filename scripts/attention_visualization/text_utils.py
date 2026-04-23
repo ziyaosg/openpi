@@ -8,7 +8,7 @@ from typing import List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import sentencepiece
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 _HERE = Path(__file__).resolve()
 sys.path.insert(0, str(_HERE.parent.parent.parent / "src"))  # src/ → openpi
@@ -136,6 +136,113 @@ def render_text_panel_as_image(obj: dict, target_height_px: int) -> Image.Image:
         strip_prefix="State: ", strip_suffix=";\n",
     )
     return _build_text_panel_image(task_chars, task_norm, state_chars, state_norm, target_height_px)
+
+
+
+
+def get_token_labels(
+    rec: dict,
+    modality: str,
+    strip_prefix: str = "",
+    strip_suffix: str = "",
+) -> Tuple[List[str], List[int]]:
+    """Content token labels and their original indices for 'task' or 'state'.
+
+    Tokens that fall entirely within strip_prefix or strip_suffix are excluded.
+    Boundary tokens are clipped to the content region so the leading/trailing
+    whitespace that belongs to the prefix or suffix is not shown.
+    Pure-whitespace tokens (e.g. separators between state values) get an empty
+    label so they show as a coloured tile with no text — no '□' placeholder.
+
+    Returns
+    -------
+    labels  : one string per content token (empty string for whitespace tokens)
+    indices : original 0-based token indices, used to slice the score array
+    """
+    piece_ids   = rec[f"outputs/debug/tokens/{modality}/piece_id"]
+    piece_begin = rec[f"outputs/debug/tokens/{modality}/piece_begin"]
+    piece_end   = rec[f"outputs/debug/tokens/{modality}/piece_end"]
+
+    decoded       = sp.decode(piece_ids.tolist())
+    content_start = len(strip_prefix)
+    content_end   = len(decoded) - len(strip_suffix) if strip_suffix else len(decoded)
+
+    labels: List[str]  = []
+    indices: List[int] = []
+    for i, (b, e) in enumerate(zip(piece_begin, piece_end)):
+        b, e = int(b), int(e)
+        if e <= content_start or b >= content_end:
+            continue                          # entirely in prefix / suffix
+        text = decoded[max(b, content_start) : min(e, content_end)]
+        labels.append(text.strip())           # "" for space tokens — no text on tile
+        indices.append(i)
+
+    return labels, indices
+
+
+def render_token_strip_as_image(
+    norm_scores: np.ndarray,
+    labels: List[str],
+    strip_h: int,
+    tile_w: int,
+    font: ImageFont.ImageFont,
+    bg: Tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    """Horizontal 1-D heatmap: tokens arranged left to right.
+
+    norm_scores — (N,) float32 in [0, 1]; maps directly to jet colour.
+    labels      — one short string per token (from get_token_labels).
+    strip_h     — height of the returned image (= row height).
+    tile_w      — pixel width allocated to each token tile.
+
+    Each token occupies a tile_w × strip_h coloured rectangle.
+    Text is rotated 90° counterclockwise (reads bottom-to-top) so the word
+    length runs along the tall axis of the tile, allowing large readable fonts.
+    Characters are dropped from the right only if the rotated label is taller
+    than strip_h - 4 px.  Text colour (black / white) is chosen for contrast.
+    """
+    N       = len(norm_scores)
+    strip_w = N * tile_w
+    # Use RGBA so rotated text can be alpha-composited without a coloured halo.
+    img  = Image.new("RGBA", (strip_w, strip_h), (*bg, 255))
+    draw = ImageDraw.Draw(img)
+
+    for i, (score, label) in enumerate(zip(norm_scores, labels)):
+        x0 = i * tile_w
+        x1 = (i + 1) * tile_w - 1
+
+        r, g, b, _ = jet_color(float(score))
+        fill_rgb = (int(r * 255), int(g * 255), int(b * 255))
+        draw.rectangle([x0, 0, x1, strip_h - 1], fill=(*fill_rgb, 255))
+
+        if not label:
+            continue
+
+        # Measure and truncate so the rotated label height fits in strip_h.
+        display = label
+        bbox    = draw.textbbox((0, 0), display, font=font)
+        tw, th  = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        while len(display) > 1 and tw > strip_h - 4:
+            display = display[:-1]
+            bbox    = draw.textbbox((0, 0), display, font=font)
+            tw, th  = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+        lum        = 0.299 * r + 0.587 * g + 0.114 * b
+        text_color = (0, 0, 0, 255) if lum > 0.45 else (255, 255, 255, 255)
+
+        # Render onto a transparent layer, rotate 90° CCW (bottom-to-top).
+        # Draw at (-bbox[0], -bbox[1]) so the glyph is flush with the layer edges,
+        # avoiding clipping when bbox offsets are non-zero.
+        text_layer = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+        ImageDraw.Draw(text_layer).text((-bbox[0], -bbox[1]), display, fill=text_color, font=font)
+        rotated = text_layer.rotate(90, expand=True)  # size becomes (th, tw)
+
+        # Centre rotated text in the tile (rotated.width=th, rotated.height=tw).
+        rx = x0 + max((tile_w - rotated.width)  // 2, 0)
+        ry =      max((strip_h - rotated.height) // 2, 0)
+        img.alpha_composite(rotated, (rx, ry))
+
+    return img.convert("RGB")
 
 
 def render_text_panel_from_token_scores(

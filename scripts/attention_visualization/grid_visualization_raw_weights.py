@@ -27,9 +27,9 @@ from ..attention_utils.series import FULL_ATTN_KEY
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260407_155916/heatmap_raw_weights"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
+INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260421_133206"
+OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260421_133206/heatmap_raw_weights"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260421_133206/episode_summaries.json"
 
 # Layer whose attention is used for the final heatmap.
 TARGET_LAYER = 16
@@ -116,7 +116,7 @@ def process_one(npy_path: str, out_png: str) -> None:
 
     full_attn = np.asarray(rec[FULL_ATTN_KEY])
     if full_attn.ndim != 4:
-        raise ValueError(f"{full_attn_key} expected 4D (L,B,H,S), got {full_attn.shape}")
+        raise ValueError(f"{FULL_ATTN_KEY} expected 4D (L,B,H,S), got {full_attn.shape}")
 
     cam_spans = []
     for cam_name, img_key in zip(CAM_NAMES, CAM_IMAGE_KEYS):
@@ -132,16 +132,24 @@ def process_one(npy_path: str, out_png: str) -> None:
     if "outputs/debug/spans/state" in rec:
         state_span = tuple(int(x) for x in np.asarray(rec["outputs/debug/spans/state"]).tolist())
 
+    # Map layer numbers to their storage indices using the saved layers array.
+    layers_key = "outputs/debug/attn/layers"
+    if layers_key not in rec:
+        raise KeyError(f"Missing {layers_key} in {npy_path}")
+    stored_layers = np.asarray(rec[layers_key]).tolist()
+    sel_idx    = stored_layers.index(HEAD_SELECTION_LAYER)
+    target_idx = stored_layers.index(TARGET_LAYER)
+
     # Two-stage head selection: pick heads using HEAD_SELECTION_LAYER (early layer
     # where image/text head specialisation is stable across steps), then read the
     # actual attention values from TARGET_LAYER (late layer with sharper spatial
     # concentration). This gives stability in which heads we use combined with
     # spatial sharpness in the scores we read.
-    selector_attn = full_attn[HEAD_SELECTION_LAYER, 0, :, :]  # (H, S)
+    selector_attn = full_attn[sel_idx, 0, :, :]  # (H, S)
     top_head_idx  = select_heads(selector_attn, cam_spans, task_span, state_span, TOP_K_HEADS)
     # take the element-wise max across the selected heads so each token position
     # gets the strongest signal from any of those heads
-    attn_row      = full_attn[TARGET_LAYER, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
+    attn_row      = full_attn[target_idx, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
 
     print(f"  heads selected via layer {HEAD_SELECTION_LAYER}, applied to layer {TARGET_LAYER}: {sorted(int(h) for h in top_head_idx)}")
 

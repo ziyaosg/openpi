@@ -17,6 +17,11 @@ def short_label(modality_key: str) -> str:
         "outputs/debug/gradcam/image/left_wrist_0_rgb": "left_wrist_rgb",
         "outputs/debug/gradcam/task": "task",
         "outputs/debug/gradcam/state": "state",
+        # Raw alpha attribution keys
+        "outputs/debug/raw_alpha/image/base_0_rgb": "base_rgb",
+        "outputs/debug/raw_alpha/image/left_wrist_0_rgb": "left_wrist_rgb",
+        "outputs/debug/raw_alpha/task": "task",
+        "outputs/debug/raw_alpha/state": "state",
         # Attention span keys
         "outputs/debug/spans/image/base_0_rgb": "base_rgb",
         "outputs/debug/spans/image/left_wrist_0_rgb": "left_wrist_rgb",

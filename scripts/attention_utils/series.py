@@ -75,12 +75,75 @@ def _extract_raw_attn_row(record: dict) -> np.ndarray:
         s = record[ATTN_KEYS["state"]]
         state_span = (int(s[0]), int(s[1]))
 
-    selector_attn = full_attn[RAW_ATTN_HEAD_SELECTION_LAYER, 0, :, :]  # (H, S)
+    # Map layer numbers to their storage indices using the saved layers array.
+    stored_layers = np.asarray(record["outputs/debug/attn/layers"]).tolist()
+    sel_idx    = stored_layers.index(RAW_ATTN_HEAD_SELECTION_LAYER)
+    target_idx = stored_layers.index(RAW_ATTN_TARGET_LAYER)
+
+    selector_attn = full_attn[sel_idx, 0, :, :]  # (H, S)
     top_head_idx = _select_heads(selector_attn, all_img_spans, task_span, state_span, RAW_ATTN_TOP_K_HEADS)
 
     # Element-wise max across selected heads from the target layer
-    attn_row = full_attn[RAW_ATTN_TARGET_LAYER, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
+    attn_row = full_attn[target_idx, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
     return attn_row.astype(np.float32)
+
+
+FULL_V_KEY = "outputs/debug/attn/v"
+
+
+def _extract_value_score_row(record: dict, mode: str) -> np.ndarray:
+    """Two-stage head selection on value-weighted scores.
+
+    mode="v_norm":   score[s] = attn[h,s] * ||v[s,h,:]||, max over top-K heads.
+    mode="v_cosine": score[s] = |cosine(v[s,h,:], o_h)|,  max over top-K heads,
+                     where o_h = sum_s(attn[h,s] * v[s,h,:]).
+
+    Returns a (S,) float32 array over all token positions.
+    """
+    from .keys import ATTN_KEYS, CAM_NAMES
+
+    full_attn = np.asarray(record[FULL_ATTN_KEY])    # (2, B, H, S)
+    full_v    = np.asarray(record[FULL_V_KEY])        # (2, B, S, H, D)
+
+    stored_layers = np.asarray(record["outputs/debug/attn/layers"]).tolist()
+    sel_idx    = stored_layers.index(RAW_ATTN_HEAD_SELECTION_LAYER)
+    target_idx = stored_layers.index(RAW_ATTN_TARGET_LAYER)
+
+    all_img_spans: list[tuple[int, int]] = []
+    for cam_name in CAM_NAMES:
+        span_key = f"outputs/debug/spans/image/{cam_name}"
+        if span_key in record:
+            s = record[span_key]
+            all_img_spans.append((int(s[0]), int(s[1])))
+
+    task_span = state_span = None
+    if ATTN_KEYS["task"] in record:
+        s = record[ATTN_KEYS["task"]]
+        task_span = (int(s[0]), int(s[1]))
+    if ATTN_KEYS["state"] in record:
+        s = record[ATTN_KEYS["state"]]
+        state_span = (int(s[0]), int(s[1]))
+
+    selector_attn = full_attn[sel_idx, 0, :, :]       # (H, S)
+    top_heads = _select_heads(selector_attn, all_img_spans, task_span, state_span, RAW_ATTN_TOP_K_HEADS)
+
+    attn = full_attn[target_idx, 0, :, :]              # (H, S)
+    v    = full_v[target_idx, 0, :, :, :]              # (S, H, D)
+
+    if mode == "v_norm":
+        v_norms  = np.linalg.norm(v, axis=-1)          # (S, H)
+        weighted = attn * v_norms.T                    # (H, S)
+        row = weighted[top_heads, :].max(axis=0)
+    elif mode == "v_cosine":
+        o      = np.einsum("hs,shd->hd", attn, v)                              # (H, D)
+        o_unit = o / (np.linalg.norm(o, axis=-1, keepdims=True) + 1e-9)        # (H, D)
+        v_unit = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)        # (S, H, D)
+        cos    = np.einsum("shd,hd->sh", v_unit, o_unit)                       # (S, H)
+        row    = np.abs(cos)[:, top_heads].max(axis=1)
+    else:
+        raise ValueError(f"Unknown mode {mode!r}. Choose 'v_norm' or 'v_cosine'.")
+
+    return row.astype(np.float32)
 
 
 def extract_patches(
@@ -91,9 +154,13 @@ def extract_patches(
 ) -> np.ndarray:
     """Return a flat float32 array of patch/token values for one modality at one step.
 
-    gradcam:  record[key][0] is the attribution array (batch-indexed list).
-    raw_attn: key is a span key; head selection via _extract_raw_attn_row(), then
-              slice out the modality's token range.
+    data_source options:
+      "gradcam"      — GradCAM attribution scores
+      "raw_alpha"    — raw gradient sum per patch/token
+      "raw_alpha_norm" — L2-norm-based raw alpha
+      "attn"         — raw softmax attention weights (head-selected)
+      "v_norm"       — value-norm weighted attention
+      "v_cosine"     — value direction cosine alignment
     """
     if data_source == "gradcam":
         from .keys import GRADCAM_KEYS
@@ -103,6 +170,13 @@ def extract_patches(
         elif ATTR_RELU_STATE and key == GRADCAM_KEYS["state"]:
             vals = np.maximum(vals, 0.0)
         return vals
+    if data_source in ("raw_alpha", "raw_alpha_norm"):
+        return np.asarray(record[key][0], dtype=np.float32).reshape(-1)
+    if data_source in ("v_norm", "v_cosine"):
+        score_row = _extract_value_score_row(record, mode=data_source)
+        span = record[key]
+        return score_row[int(span[0]):int(span[1])]
+    # default: raw attention weights
     attn_row = _extract_raw_attn_row(record)
     span = record[key]
     start, end = int(span[0]), int(span[1])
