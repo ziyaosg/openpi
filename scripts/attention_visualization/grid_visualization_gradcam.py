@@ -26,9 +26,9 @@ from ..attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260421_133206"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260421_133206/heatmap_gradcam"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260421_133206/episode_summaries.json"
+INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260423_180932"
+OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260423_180932/heatmap_gradcam"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260423_180932/episode_summaries.json"
 
 APPLY_RELU = True
 ALPHA      = 0.30

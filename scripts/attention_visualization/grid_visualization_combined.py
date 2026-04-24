@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Combined 5-method attribution heatmap per step.
+"""Combined 6-method attribution heatmap per step.
 
-Layout (6 data rows × 4 modality columns):
+Layout (7 data rows × 4 modality columns):
   Columns:  [label] | Base Camera | Wrist Camera | Task | State
   Row 0:   Original — raw images, blank token columns
   Row 1:   GradCAM
   Row 2:   Raw Alpha  (gradient summation, abs + percentile-clip + gamma)
   Row 3:   Raw Weights  (softmax attention, top-k image-focused heads)
-  Row 4:   V-Norm  (attn × ‖value‖, top-k heads)
-  Row 5:   V-Cosine  (|cos(value, head output)|, top-k heads)
+  Row 4:   V-Norm     (attn × ‖value‖, top-k heads)
+  Row 5:   V-Cosine   (|cos(value, head output)|, top-k heads)
+  Row 6:   V-Combined (|attn × <value, o_unit>|, top-k heads)
 
 Camera columns are W×W image cells (vertically centred in each row).
 Task and State columns show tokens left-to-right as coloured tiles; their
@@ -45,38 +46,38 @@ from .grid_visualization_raw_weights import (
     HEAD_SELECTION_LAYER,
     TOP_K_HEADS,
 )
-from .grid_visualization_value_attn import score_v_norm, score_v_cosine
+from .grid_visualization_value_attn import score_v_norm, score_v_cosine, score_v_combined
 
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260421_133206"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260421_133206/heatmap_combined"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260421_133206/episode_summaries.json"
+INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260423_180932"
+OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260423_180932/heatmap_combined"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260423_180932/episode_summaries.json"
 
 ALPHA     = 0.30
 SMOOTHING = "BILINEAR"
 BG        = (255, 255, 255)
-GAP_X     = 12
-GAP_Y     = 12
-LABEL_W   = 130
-HEADER_H  = 30
-FONT_SIZE       = 14   # row labels and column headers
-TOKEN_FONT_SIZE = 28   # token strip labels (rotated inside each tile)
+GAP_X     = 16
+GAP_Y     = 16
+LABEL_W   = 180
+HEADER_H  = 42
+FONT_SIZE       = 18   # row labels and column headers
+TOKEN_FONT_SIZE = 38   # token strip labels (rotated inside each tile)
 
 # Images are upscaled to this size for display; token strips use the same height
 # so every cell in a row is exactly IMG_DISPLAY × IMG_DISPLAY (or × col_w for tokens).
-IMG_DISPLAY = 300
+IMG_DISPLAY = 420
 
 # Pixel width allocated per token tile in the horizontal strips.
 # Column width = N_content_tokens × TILE_W, always wider than the image columns.
-TASK_TILE_W  = 80   # task tokens are English subwords (3–8 chars)
-STATE_TILE_W = 56   # state tokens are single-char numerals / spaces
+TASK_TILE_W  = 110  # task tokens are English subwords (3–8 chars)
+STATE_TILE_W = 42   # state tokens are single-char numerals / spaces
 
 APPLY_RELU_GRADCAM  = True
 APPLY_ABS_RAW_ALPHA = True
 
-ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Norm", "V-Cosine"]
+ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Norm", "V-Cosine", "V-Combined"]
 COL_LABELS = ["Base Camera", "Wrist Camera", "Task", "State"]
 
 FULL_ATTN_KEY = "outputs/debug/attn/weights"
@@ -197,9 +198,10 @@ def process_one(npy_path: str, out_png: str) -> None:
     attn      = full_attn[tgt_idx, 0]             # (H, S)
     v         = full_v[tgt_idx, 0]               # (S, K, D)
 
-    raw_w_full   = attn[top_heads].max(axis=0)         # (S,)
-    vnorm_full   = score_v_norm(attn, v, top_heads)    # (S,)
-    vcosine_full = score_v_cosine(attn, v, top_heads)  # (S,)
+    raw_w_full      = attn[top_heads].max(axis=0)            # (S,)
+    vnorm_full      = score_v_norm(attn, v, top_heads)       # (S,)
+    vcosine_full    = score_v_cosine(attn, v, top_heads)     # (S,)
+    vcombined_full  = score_v_combined(attn, v, top_heads)   # (S,)
 
     def _patch(s: np.ndarray) -> List[np.ndarray]:
         return [s[s0:s1].reshape(Hp, Wp) for s0, s1 in cam_spans]
@@ -217,6 +219,7 @@ def process_one(npy_path: str, out_png: str) -> None:
         log_normalize_joint(_patch(raw_w_full)),
         log_normalize_joint(_patch(vnorm_full)),
         normalize_joint(_patch(vcosine_full)),
+        log_normalize_joint(_patch(vcombined_full)),
     ]
 
     # ── Per-method token scores (content tokens only, indexed by task/state_idx) ─
@@ -227,6 +230,7 @@ def process_one(npy_path: str, out_png: str) -> None:
             _task_slice(raw_w_full),
             _task_slice(vnorm_full),
             _task_slice(vcosine_full),
+            _task_slice(vcombined_full),
         ]
     ]
     state_scores_per_method: List[np.ndarray] = [
@@ -236,6 +240,7 @@ def process_one(npy_path: str, out_png: str) -> None:
             _state_slice(raw_w_full),
             _state_slice(vnorm_full),
             _state_slice(vcosine_full),
+            _state_slice(vcombined_full),
         ]
     ]
 

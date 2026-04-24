@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 """Value-weighted attention heatmaps.
 
-Two modes controlled by MODE:
+Three modes controlled by MODE:
 
-  "v_norm"   — value-norm weighted attention:
-                score[s] = attn[h,s] * ||v[s,h,:]||_2
-                High score means the head both attends to position s AND
-                has a large-magnitude value there. Visualises WHERE the
-                head is doing significant work.
+  "v_norm"     — value-norm weighted attention:
+                  score[s] = attn[h,s] * ||v[s,0,:]||_2
+                  High score means the head both attends to position s AND
+                  has a large-magnitude value there.
 
-  "v_cosine" — value direction alignment:
-                o_h = sum_s(attn[h,s] * v[s,h,:])        (head output)
-                score[s] = |cosine(v[s,h,:], o_h)|
-                High score means the value at position s points in the
-                same direction as what the head actually outputs.
-                Visualises WHICH positions drive the head's output direction.
+  "v_cosine"   — value direction alignment:
+                  o_h = sum_s(attn[h,s] * v[s,0,:])       (head output)
+                  score[s] = |cosine(v[s,0,:], o_h)|
+                  High score means the value at position s points in the
+                  same direction as what the head actually outputs.
 
-In both cases head selection follows the two-stage strategy from
-grid_visualization_raw_weights.py: rank heads at HEAD_SELECTION_LAYER by
-image/(task+state) budget ratio, then aggregate the selected heads at
-TARGET_LAYER via element-wise max.
+  "v_combined" — projection of token contribution onto output direction:
+                  score[s] = |attn[h,s] * <v[s,0,:], o_unit_h>|
+                           = attn[h,s] * ||v[s,0,:]|| * |cos(v[s,0,:], o_h)|
+                  Only positions that are both strongly attended AND
+                  directionally aligned score high. Combines the signals
+                  from v_norm and v_cosine.
+
+v is stored with K KV-heads (K=1 for gemma_2b GQA); v[s,0,:] is the single
+shared value vector per position. Head selection follows the two-stage
+strategy from grid_visualization_raw_weights.py.
 """
 from __future__ import annotations
 
@@ -47,10 +51,10 @@ from ..attention_utils.keys import CAM_IMAGE_KEYS, CAM_NAMES, IMAGE_PATCH_GRID
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260421_133206"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260421_133206/episode_summaries.json"
+INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260423_180932"
+EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260423_180932/episode_summaries.json"
 
-# "v_norm" or "v_cosine"
+# "v_norm", "v_cosine", or "v_combined"
 MODE = "v_norm"
 
 OUTPUT_DIR = str(Path(INPUT_DIR) / f"heatmap_{MODE}")
@@ -129,6 +133,20 @@ def score_v_cosine(
     return np.abs(cos)[:, top_heads].max(axis=1).astype(np.float32)
 
 
+def score_v_combined(
+    attn: np.ndarray,   # (H, S)
+    v: np.ndarray,      # (S, K, D)  K=1 for GQA
+    top_heads: np.ndarray,
+) -> np.ndarray:
+    """|attn[h,s] * <v[s,0,:], o_unit_h>|, then max over selected heads → (S,).
+    Equivalent to attn[s] * ||v[s]|| * |cos(v[s], o_h)|."""
+    v0 = v[:, 0, :]                                                          # (S, D)
+    o = attn @ v0                                                            # (H, D)
+    o_unit = o / (np.linalg.norm(o, axis=-1, keepdims=True) + 1e-9)         # (H, D)
+    proj = attn.T * (v0 @ o_unit.T)                                          # (S, H)
+    return np.abs(proj)[:, top_heads].max(axis=1).astype(np.float32)
+
+
 # ============================================================
 # NORMALISATION
 # ============================================================
@@ -194,8 +212,10 @@ def process_one(npy_path: str, out_png: str) -> None:
         score_fn = score_v_norm
     elif MODE == "v_cosine":
         score_fn = score_v_cosine
+    elif MODE == "v_combined":
+        score_fn = score_v_combined
     else:
-        raise ValueError(f"Unknown MODE {MODE!r}. Choose 'v_norm' or 'v_cosine'.")
+        raise ValueError(f"Unknown MODE {MODE!r}. Choose 'v_norm', 'v_cosine', or 'v_combined'.")
 
     full_score = score_fn(attn, v, top_heads)    # (S,)
 
@@ -211,10 +231,10 @@ def process_one(npy_path: str, out_png: str) -> None:
     if np.array_equal(imgs[0], imgs[1]):
         print(f"[WARN] Images identical in {npy_path}")
 
-    if MODE == "v_norm":
-        heats01 = _normalize_joint(heats)
-    else:
+    if MODE == "v_cosine":
         heats01 = _normalize_cosine_joint(heats)
+    else:
+        heats01 = _normalize_joint(heats)   # v_norm and v_combined: log1p + percentile clip + gamma
 
     overlays, originals = [], []
     for img, h01 in zip(imgs, heats01):
