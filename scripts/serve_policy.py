@@ -105,7 +105,7 @@ def main(args: Args) -> None:
     # Record the policy's behavior.
     if args.record:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        policy = _policy.PolicyRecorder(policy, f"/data/ann/policy_records_{timestamp}")
+        policy = _policy.PolicyRecorder(policy, f"/data/ziyao/policy_records_{timestamp}")
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)

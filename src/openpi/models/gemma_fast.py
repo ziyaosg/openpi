@@ -237,9 +237,8 @@ class Attention(nn.Module):
         # Always collect the LAST query row.
         # In the prefix prefill call, this row is the one whose logit predicts
         # the first decoded action token.
-        attn_last_row = probs_full[:, :, -1, :]   # [B, H, S]
+        attn_last_row = probs_full[:, :, -1, :]    # [B, H, S]
 
-        # return self.attn_vec_einsum("BTNH,NHD->BTD", encoded), kv_cache
         return attn_output, kv_cache, attn_last_row
 
 
@@ -284,10 +283,6 @@ class Block(nn.Module):
         # Standard pre-attention normalization
         inputs_normalized = self.pre_attention_norm(x)
 
-        # Self-attention now always returns:
-        #   1) transformed hidden states
-        #   2) updated KV cache
-        #   3) raw attention row from the LAST query position, shape [B, H, S]
         attn_output, kv_cache, attn_last_row = self.attn(
             inputs_normalized, positions, attn_mask, kv_cache, decode, deterministic
         )
@@ -303,9 +298,8 @@ class Block(nn.Module):
         outputs = self.drop(outputs, deterministic)
         outputs = residual + outputs
 
-        # Return attn_last_row alongside kv_cache so the scan stacks it across layers.
-        # Shape [B, H, S]:
-        #   B = batch, H = number of heads, S = number of key positions
+        # Scan stacks (kv_cache, attn_last_row) across all depth layers.
+        # attn_last_row: [B, H, S] — softmax weights at last query pos
         return outputs, (kv_cache, attn_last_row)
 
 
@@ -442,13 +436,15 @@ class Module(nn.Module):
         ]
 
         for block in blocks:
-            # The scan stacks (kv_cache, attn_last_row) across all depth layers.
-            # attn_rows shape after scan: [depth, B, H, S]
+            # Scan stacks (kv_cache, attn_rows) across all depth layers.
+            # kv_cache[2] after scan: [depth, B, S_cache, num_kv_heads, head_dim]
+            # attn_rows after scan:   [depth, B, H, S]
             x, (kv_cache, attn_rows) = block(x, kv_cache, positions, mask, decode, deterministic)
 
         assert x.dtype == jnp.dtype(self.embed_dtype)  # Sanity check.
         out["encoded"] = x
-        out["attn_rows"] = attn_rows  # [depth, B, H, S] — one row per layer, raw softmax weights
+        out["attn_rows"] = attn_rows   # [depth, B, H, S]
+        out["v_cache"] = kv_cache[2]   # [depth, B, S_cache, num_kv_heads, head_dim]
 
         x = RMSNorm(name="final_norm")(x)
         out["pre_logits"] = x
