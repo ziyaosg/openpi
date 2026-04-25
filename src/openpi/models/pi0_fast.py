@@ -525,7 +525,6 @@ class Pi0FAST(_model.BaseModel):
         # embed inputs
         prefix_emb_unaligned, prefix_mask_unaligned, prefix_ar_mask_unaligned, spans, meta = \
             self.embed_inputs_with_spans(observation)
-        # prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
         prefix_attn_mask_unaligned = make_attn_mask(prefix_mask_unaligned, prefix_ar_mask_unaligned)
 
         # left to right align all input token sequences
@@ -553,131 +552,137 @@ class Pi0FAST(_model.BaseModel):
         # The final prefix logit predicts the FIRST decoded action token.
         last_logit = prefix_logits[:, -1:]
 
-        # choose the target token for the FIRST decoded token (step 0)
-        # use greedy choice to make attribution deterministic
-        action_token_0 = jnp.argmax(last_logit, axis=-1)  # (B, 1) token id in vocab
+        # FIRST 5 ACTION TOKENS
+        target_tokens = []
+        current_logit = last_logit
+        current_kv = kv_cache
+        current_pos = prefill_len
 
-        token_emb_0_for_attr = self.PaliGemma.llm(action_token_0, embed_only=True)
-        positions_0_for_attr = prefill_len[:, None] + 1
-        mask_0_for_attr = jnp.logical_and(
-            jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
-            jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
-            < (jnp.broadcast_to(prefill_size + 1, (prefix_start.shape[0], 1, 1))),
-        )
-        logit_for_token_1, _, _ = self.PaliGemma.llm(
-            embedded_prefix=token_emb_0_for_attr,
-            mask=mask_0_for_attr,
-            positions=positions_0_for_attr,
-            decode=True,
-            kv_cache=kv_cache,
-        )
+        for step_i in range(5):
+            token_i = jnp.argmax(current_logit, axis=-1)  # (B, 1)
+            target_tokens.append(token_i)
 
-        # Use token_1 as the attribution target instead of token_0
-        target_token = jnp.argmax(logit_for_token_1, axis=-1)  # (B, 1)
+            token_emb_i = self.PaliGemma.llm(token_i, embed_only=True)
+            positions_i = current_pos[:, None] + 1
+            mask_i = jnp.logical_and(
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
+                < (jnp.broadcast_to(prefill_size + step_i + 2, (prefix_start.shape[0], 1, 1))),
+            )
+            current_logit, current_kv, _ = self.PaliGemma.llm(
+                embedded_prefix=token_emb_i,
+                mask=mask_i,
+                positions=positions_i,
+                decode=True,
+                kv_cache=current_kv,
+            )
+            current_pos = current_pos + 1
 
-        # calculate gradients
-        grads = self.compute_modality_grads(
-            prefix_emb_unaligned,
-            prefix_mask_unaligned,
-            prefix_ar_mask_unaligned,
-            max_decoding_steps=int(max_decoding_steps),
-            target_token=target_token,
-        )  # (B,S,D)
-
-        debug = {"gradcam": {}, "raw_alpha": {"summation": {}, "norm": {}}, "tokens": {}, "attn": {}, "spans": spans}
-
-        # -----------------------
-        # Image Grad-CAM (per view)
-        # -----------------------
-        gradcam_image = {}
-        raw_alpha_image = {}
-        raw_alpha_norm_image = {}
-        for cam_name, (s0, s1) in spans["image"].items():
-            patch_tokens = prefix_emb_unaligned[:, s0:s1, :]
-            patch_grads  = grads[:, s0:s1, :]
-            grid_hw = meta["image_grids"][cam_name]
-
-            gradcam_image[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
-            raw_alpha_image[cam_name], raw_alpha_norm_image[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
-        debug["gradcam"]["image"] = gradcam_image
-        debug["raw_alpha"]["summation"]["image"] = raw_alpha_image
-        debug["raw_alpha"]["norm"]["image"] = raw_alpha_norm_image
-
-        task_token_len = observation.task_token_len
-        state_token_len = observation.state_token_len
-        task_start, task_end = 0, task_token_len
-        state_start, state_end = task_end, task_end + state_token_len
-
-        # -----------------------
-        # Task attribution (per token)
-        # -----------------------
-        t0, t1 = spans["task"]
-
-        task_tokens = prefix_emb_unaligned[:, t0:t1, :]
-        task_grads  = grads[:, t0:t1, :]
-        task_scores              = jnp.sum(task_tokens * task_grads, axis=-1)  # (B, Nt)
-        task_raw_alpha, task_raw_alpha_norm = raw_alpha_from_tokens(task_grads)
-
-        task_token_mask = None
-        if observation.tokenized_prompt_mask is not None:
-            task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
-            task_scores         = task_scores         * task_token_mask.astype(task_scores.dtype)
-            task_raw_alpha      = task_raw_alpha      * task_token_mask.astype(task_raw_alpha.dtype)
-            task_raw_alpha_norm = task_raw_alpha_norm * task_token_mask.astype(task_raw_alpha_norm.dtype)
-
-        debug["gradcam"]["task"] = task_scores
-        debug["raw_alpha"]["summation"]["task"] = task_raw_alpha
-        debug["raw_alpha"]["norm"]["task"] = task_raw_alpha_norm
-        debug["tokens"]["task"] = {
-            "token_ids":   observation.tokenized_prompt[:, task_start:task_end],
-            "token_mask":  task_token_mask,
-            "piece_id":    observation.task_piece_id[:task_token_len],
-            "piece_begin": observation.task_piece_begin[:task_token_len],
-            "piece_end":   observation.task_piece_end[:task_token_len],
+        debug = {
+            "gradcam": {"action_tokens": {}},
+            "raw_alpha": {"summation": {"action_tokens": {}}, "norm": {"action_tokens": {}}},
+            "tokens": {},
+            "attn": {},
+            "spans": spans,
         }
 
-        # -----------------------
-        # State attribution (per token)
-        # -----------------------
-        s0, s1 = spans["state"]
+        for step_i, target_token_i in enumerate(target_tokens):
+            grads_i = self.compute_modality_grads(
+                prefix_emb_unaligned,
+                prefix_mask_unaligned,
+                prefix_ar_mask_unaligned,
+                max_decoding_steps=int(max_decoding_steps),
+                target_token=target_token_i,
+            )
 
-        state_tokens = prefix_emb_unaligned[:, s0:s1, :]
-        state_grads  = grads[:, s0:s1, :]
-        state_scores                   = jnp.sum(state_tokens * state_grads, axis=-1)  # (B, Ns)
-        state_raw_alpha, state_raw_alpha_norm = raw_alpha_from_tokens(state_grads)
+            # -----------------------
+            # Image Grad-CAM (per view)
+            # -----------------------
+            gradcam_i = {}
+            raw_alpha_i = {}
+            raw_alpha_norm_i = {}
+            for cam_name, (s0, s1) in spans["image"].items():
+                patch_tokens = prefix_emb_unaligned[:, s0:s1, :]
+                patch_grads  = grads_i[:, s0:s1, :]
+                grid_hw = meta["image_grids"][cam_name]
+                gradcam_i[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
+                raw_alpha_i[cam_name], raw_alpha_norm_i[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
 
-        state_token_mask = None
-        if observation.tokenized_prompt_mask is not None:
-            state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
-            state_scores          = state_scores          * state_token_mask.astype(state_scores.dtype)
-            state_raw_alpha       = state_raw_alpha       * state_token_mask.astype(state_raw_alpha.dtype)
-            state_raw_alpha_norm  = state_raw_alpha_norm  * state_token_mask.astype(state_raw_alpha_norm.dtype)
+            debug["gradcam"]["action_tokens"][step_i] = gradcam_i
+            debug["raw_alpha"]["summation"]["action_tokens"][step_i] = raw_alpha_i
+            debug["raw_alpha"]["norm"]["action_tokens"][step_i] = raw_alpha_norm_i
 
-        debug["gradcam"]["state"] = state_scores
-        debug["raw_alpha"]["summation"]["state"] = state_raw_alpha
-        debug["raw_alpha"]["norm"]["state"] = state_raw_alpha_norm
-        debug["tokens"]["state"] = {
-            "token_ids":   observation.tokenized_prompt[:, state_start:state_end],
-            "token_mask":  state_token_mask,
-            "piece_id":    observation.state_piece_id[:state_token_len],
-            "piece_begin": observation.state_piece_begin[:state_token_len],
-            "piece_end":   observation.state_piece_end[:state_token_len],
-        }
-        
-        
-        output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
+            task_token_len = observation.task_token_len
+            state_token_len = observation.state_token_len
+            task_start, task_end = 0, task_token_len
+            state_start, state_end = task_end, task_end + state_token_len
 
-        # ---------------------------------------------------------------
-        # Decode step 0 — run manually (outside while_loop) so we can
-        # call with mutable=True and capture the first action token's
-        # attention across the full prefix.
-        # ---------------------------------------------------------------
+            # -----------------------
+            # Task attribution (per token)
+            # -----------------------
+            t0, t1 = spans["task"]
+            task_tokens = prefix_emb_unaligned[:, t0:t1, :]
+            task_grads  = grads_i[:, t0:t1, :]
+            task_scores = jnp.sum(task_tokens * task_grads, axis=-1)
+            task_raw_alpha, task_raw_alpha_norm = raw_alpha_from_tokens(task_grads)
+
+            task_token_mask = None
+            if observation.tokenized_prompt_mask is not None:
+                task_token_mask = observation.tokenized_prompt_mask[:, task_start:task_end]
+                task_scores         = task_scores         * task_token_mask.astype(task_scores.dtype)
+                task_raw_alpha      = task_raw_alpha      * task_token_mask.astype(task_raw_alpha.dtype)
+                task_raw_alpha_norm = task_raw_alpha_norm * task_token_mask.astype(task_raw_alpha_norm.dtype)
+
+            # -----------------------
+            # State attribution (per token)
+            # -----------------------
+            s0, s1 = spans["state"]
+            state_tokens = prefix_emb_unaligned[:, s0:s1, :]
+            state_grads  = grads_i[:, s0:s1, :]
+            state_scores = jnp.sum(state_tokens * state_grads, axis=-1)
+            state_raw_alpha, state_raw_alpha_norm = raw_alpha_from_tokens(state_grads)
+
+            state_token_mask = None
+            if observation.tokenized_prompt_mask is not None:
+                state_token_mask = observation.tokenized_prompt_mask[:, state_start:state_end]
+                state_scores          = state_scores          * state_token_mask.astype(state_scores.dtype)
+                state_raw_alpha       = state_raw_alpha       * state_token_mask.astype(state_raw_alpha.dtype)
+                state_raw_alpha_norm  = state_raw_alpha_norm  * state_token_mask.astype(state_raw_alpha_norm.dtype)
+
+            if step_i == 0:
+                # Only store token metadata once (same for all steps)
+                debug["tokens"]["task"] = {
+                    "token_ids":   observation.tokenized_prompt[:, task_start:task_end],
+                    "token_mask":  task_token_mask,
+                    "piece_id":    observation.task_piece_id[:task_token_len],
+                    "piece_begin": observation.task_piece_begin[:task_token_len],
+                    "piece_end":   observation.task_piece_end[:task_token_len],
+                }
+                debug["tokens"]["state"] = {
+                    "token_ids":   observation.tokenized_prompt[:, state_start:state_end],
+                    "token_mask":  state_token_mask,
+                    "piece_id":    observation.state_piece_id[:state_token_len],
+                    "piece_begin": observation.state_piece_begin[:state_token_len],
+                    "piece_end":   observation.state_piece_end[:state_token_len],
+                }
+
+            debug["gradcam"]["action_tokens"][step_i]["task"] = task_scores
+            debug["gradcam"]["action_tokens"][step_i]["state"] = state_scores
+            debug["raw_alpha"]["summation"]["action_tokens"][step_i]["task"] = task_raw_alpha
+            debug["raw_alpha"]["summation"]["action_tokens"][step_i]["state"] = state_raw_alpha
+            debug["raw_alpha"]["norm"]["action_tokens"][step_i]["task"] = task_raw_alpha_norm
+            debug["raw_alpha"]["norm"]["action_tokens"][step_i]["state"] = state_raw_alpha_norm
+
+        # --------------
+        # Decode step 0 
+        # --------------
         rng, rng_step0 = jax.random.split(rng)
         if temperature > 0.0:
             token_0 = jax.random.categorical(rng_step0, last_logit / temperature, axis=-1)
         else:
             token_0 = jnp.argmax(last_logit, axis=-1)   # (B, 1)
 
+        output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps))
         output_tokens = put_along_last_axis(
             output_tokens, jnp.broadcast_to(0, (token_0.shape[0], 1)), token_0
         )
@@ -700,11 +705,6 @@ class Pi0FAST(_model.BaseModel):
             kv_cache=kv_cache,
         )
 
-        # Trim both to prefix length.
-        # attn_rows: [L, B, H, S_cache] -> [L, B, H, S_prefix]
-        # v_cache:   [L, B, S_cache, K, D_head] -> [L, B, S_prefix, K, D_head]
-        # Layer 1: stable head-selection layer (image-focused heads rank consistently).
-        # Layer 16: sharp spatial concentration for the actual heatmap values.
         ATTN_LAYERS = jnp.array([1, 16])
         attn_weights = out_step0["attn_rows"][ATTN_LAYERS, :, :, :prefill_size]
         v_trimmed    = out_step0["v_cache"][ATTN_LAYERS, :, :prefill_size, :, :]
@@ -716,13 +716,11 @@ class Pi0FAST(_model.BaseModel):
         }
 
         # ---------------------------------------------------------------
-        # Decode steps 1..N — continue from where step 0 left off.
+        # Decode steps 1..N
         # ---------------------------------------------------------------
         def step(carry):
             rng, last_logit, output_tokens, cache, _, step = carry
 
-            # Sample token from last logit
-            # Split RNG for this step
             rng, rng_step = jax.random.split(rng)
             token = jax.lax.cond(
                 temperature > 0.0,
@@ -732,11 +730,9 @@ class Pi0FAST(_model.BaseModel):
             )
             output_tokens = put_along_last_axis(output_tokens, jnp.broadcast_to(step, (token.shape[0], 1)), token)
 
-            # Check for early stopping --> stop if all batch elements have EOS token
             has_eos = jnp.any(token == PALIGEMMA_EOS_TOKEN, axis=-1)
             all_eos = jnp.all(has_eos)
 
-            # Decode one step
             token_embedding = self.PaliGemma.llm(token, embed_only=True)
             positions = prefill_len[:, None] + step + 1
             mask = jnp.logical_and(
@@ -754,9 +750,8 @@ class Pi0FAST(_model.BaseModel):
             _, _, _, _, all_eos, step = carry
             return (~all_eos) & (step < max_decoding_steps)
 
-        # Use lax.while_loop so we can jit the full decoding loop.
-        # Start at step=1 since step 0 was already run above.
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
             cond, step, (rng, last_logit_1, output_tokens, kv_cache_1, all_eos_0, 1)
         )
+
         return output_tokens, debug
