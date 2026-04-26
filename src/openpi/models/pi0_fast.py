@@ -608,9 +608,9 @@ class Pi0FAST(_model.BaseModel):
                 gradcam_i[cam_name] = gradcam_from_patch_tokens(patch_tokens, patch_grads, grid_hw, relu=False)
                 raw_alpha_i[cam_name], raw_alpha_norm_i[cam_name] = raw_alpha_from_patch_tokens(patch_grads, grid_hw)
 
-            debug["gradcam"]["action_tokens"][step_i] = gradcam_i
-            debug["raw_alpha"]["summation"]["action_tokens"][step_i] = raw_alpha_i
-            debug["raw_alpha"]["norm"]["action_tokens"][step_i] = raw_alpha_norm_i
+            debug["gradcam"]["action_tokens"][str(step_i)] = gradcam_i
+            debug["raw_alpha"]["summation"]["action_tokens"][str(step_i)] = raw_alpha_i
+            debug["raw_alpha"]["norm"]["action_tokens"][str(step_i)] = raw_alpha_norm_i
 
             task_token_len = observation.task_token_len
             state_token_len = observation.state_token_len
@@ -666,12 +666,12 @@ class Pi0FAST(_model.BaseModel):
                     "piece_end":   observation.state_piece_end[:state_token_len],
                 }
 
-            debug["gradcam"]["action_tokens"][step_i]["task"] = task_scores
-            debug["gradcam"]["action_tokens"][step_i]["state"] = state_scores
-            debug["raw_alpha"]["summation"]["action_tokens"][step_i]["task"] = task_raw_alpha
-            debug["raw_alpha"]["summation"]["action_tokens"][step_i]["state"] = state_raw_alpha
-            debug["raw_alpha"]["norm"]["action_tokens"][step_i]["task"] = task_raw_alpha_norm
-            debug["raw_alpha"]["norm"]["action_tokens"][step_i]["state"] = state_raw_alpha_norm
+            debug["gradcam"]["action_tokens"][str(step_i)]["task"] = task_scores
+            debug["gradcam"]["action_tokens"][str(step_i)]["state"] = state_scores
+            debug["raw_alpha"]["summation"]["action_tokens"][str(step_i)]["task"] = task_raw_alpha
+            debug["raw_alpha"]["summation"]["action_tokens"][str(step_i)]["state"] = state_raw_alpha
+            debug["raw_alpha"]["norm"]["action_tokens"][str(step_i)]["task"] = task_raw_alpha_norm
+            debug["raw_alpha"]["norm"]["action_tokens"][str(step_i)]["state"] = state_raw_alpha_norm
 
         # --------------
         # Decode step 0 
