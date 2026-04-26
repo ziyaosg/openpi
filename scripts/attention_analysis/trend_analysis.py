@@ -27,8 +27,8 @@ from ..attention_utils.series import extract_patches, normalize_modality, reduce
 # ============================================================
 # PATHS
 # ============================================================
-INPUT_DIR  = Path("/home/ziyao/Documents/policy_records_20260407_155916")
-OUTPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore")
+INPUT_DIR  = Path("/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003")
+OUTPUT_DIR = Path("/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003/analysis_gradcam_avg_&_zscore")
 EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 
 # ============================================================

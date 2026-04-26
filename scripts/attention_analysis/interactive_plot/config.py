@@ -2,7 +2,7 @@ from pathlib import Path
 
 from ...attention_utils.keys import get_modality_keys
 
-INPUT_DIR = Path("/home/ziyao/Documents/policy_records_20260407_155916")
+INPUT_DIR = Path("/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003")
 OUTPUT_DIR = INPUT_DIR / "plots"
 EPISODE_SUMMARIES_JSON = INPUT_DIR / "episode_summaries.json"
 
