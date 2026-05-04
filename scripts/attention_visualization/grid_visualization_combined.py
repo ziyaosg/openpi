@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combined 6-method attribution heatmap per step.
+"""Combined 6-method attribution heatmap per step, for all 5 action tokens.
 
 Layout (7 data rows × 4 modality columns):
   Columns:  [label] | Base Camera | Wrist Camera | Task | State
@@ -11,9 +11,18 @@ Layout (7 data rows × 4 modality columns):
   Row 5:   V-Cosine   (|cos(value, head output)|, top-k heads)
   Row 6:   V-Combined (|attn × <value, o_unit>|, top-k heads)
 
-Camera columns are W×W image cells (vertically centred in each row).
-Task and State columns show tokens left-to-right as coloured tiles; their
-width is N_tokens × TILE_W, always wider than the image columns.
+Output folder structure:
+  heatmap_combined/
+    t0_task_name/
+      ep0_true/
+        step_000000/
+          action_token_0.png
+          action_token_1.png
+          action_token_2.png
+          action_token_3.png
+          action_token_4.png
+        step_000001/
+          ...
 """
 from __future__ import annotations
 
@@ -51,9 +60,9 @@ from .grid_visualization_value_attn import score_v_norm, score_v_cosine, score_v
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260423_180932"
-OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260423_180932/heatmap_combined"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260423_180932/episode_summaries.json"
+INPUT_DIR              = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003"
+OUTPUT_DIR             = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003/heatmap_combined"
+EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003/episode_summaries.json"
 
 ALPHA     = 0.30
 SMOOTHING = "BILINEAR"
@@ -62,20 +71,19 @@ GAP_X     = 16
 GAP_Y     = 16
 LABEL_W   = 180
 HEADER_H  = 42
-FONT_SIZE       = 18   # row labels and column headers
-TOKEN_FONT_SIZE = 38   # token strip labels (rotated inside each tile)
+FONT_SIZE       = 18
+TOKEN_FONT_SIZE = 38
 
-# Images are upscaled to this size for display; token strips use the same height
-# so every cell in a row is exactly IMG_DISPLAY × IMG_DISPLAY (or × col_w for tokens).
 IMG_DISPLAY = 420
 
-# Pixel width allocated per token tile in the horizontal strips.
-# Column width = N_content_tokens × TILE_W, always wider than the image columns.
-TASK_TILE_W  = 110  # task tokens are English subwords (3–8 chars)
-STATE_TILE_W = 42   # state tokens are single-char numerals / spaces
+TASK_TILE_W  = 110
+STATE_TILE_W = 42
 
 APPLY_RELU_GRADCAM  = True
 APPLY_ABS_RAW_ALPHA = True
+
+# 0-indexed: 0 = first action token, 1 = second, etc.
+NUM_ACTION_TOKENS = 5
 
 ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Norm", "V-Cosine", "V-Combined"]
 COL_LABELS = ["Base Camera", "Wrist Camera", "Task", "State"]
@@ -86,7 +94,7 @@ LAYERS_KEY    = "outputs/debug/attn/layers"
 
 
 # ============================================================
-# FONT  (row labels and column headers)
+# FONT
 # ============================================================
 def _load_font(size: int) -> ImageFont.ImageFont:
     for path in [
@@ -137,11 +145,6 @@ def _layer_indices(rec: dict) -> Tuple[int, int]:
     return stored.index(HEAD_SELECTION_LAYER), stored.index(TARGET_LAYER)
 
 
-# ============================================================
-# 1-D TOKEN SCORE NORMALIZATION
-# Same CLIP_PERCENTILE and GAMMA as clip_normalize_joint so image patches
-# and token strips share an identical perceptual scale.
-# ============================================================
 def _clip_normalize_1d(scores: np.ndarray) -> np.ndarray:
     a        = np.abs(scores).astype(np.float32)
     clip_val = float(np.percentile(a, CLIP_PERCENTILE)) if a.size > 1 else float(a.max())
@@ -150,58 +153,42 @@ def _clip_normalize_1d(scores: np.ndarray) -> np.ndarray:
 
 
 # ============================================================
-# GRADIENT-BASED PATCH HEATMAPS
+# GRADIENT-BASED PATCH HEATMAPS  (action_token_idx aware)
 # ============================================================
-def _heatmaps_gradcam(rec: dict) -> List[np.ndarray]:
+def _heatmaps_gradcam(rec: dict, action_token_idx: int) -> List[np.ndarray]:
     heats = []
     for cam in CAM_NAMES:
-        h = to_2d_heatmap(rec[f"outputs/debug/gradcam/image/{cam}"], cam)
+        h = to_2d_heatmap(rec[f"outputs/debug/gradcam/action_tokens/{action_token_idx}/{cam}"], cam)
         heats.append(np.maximum(h, 0.0) if APPLY_RELU_GRADCAM else h)
     return normalize_joint(heats)
 
 
-def _heatmaps_raw_alpha(rec: dict) -> List[np.ndarray]:
+def _heatmaps_raw_alpha(rec: dict, action_token_idx: int) -> List[np.ndarray]:
     heats = []
     for cam in CAM_NAMES:
-        h = to_2d_heatmap(np.asarray(rec[f"outputs/debug/raw_alpha/summation/image/{cam}"]), cam)
+        h = to_2d_heatmap(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{action_token_idx}/{cam}"]), cam)
         heats.append(np.abs(h) if APPLY_ABS_RAW_ALPHA else h)
     return clip_normalize_joint(heats)
 
 
 # ============================================================
-# PER-STEP COMBINED IMAGE
+# PER-STEP, PER-ACTION-TOKEN IMAGE
 # ============================================================
-def process_one(npy_path: str, out_png: str) -> None:
-    rec  = load_record(npy_path)
-    # Upscale camera images to IMG_DISPLAY for display; token strips use the same height.
-    imgs = [
-        np.array(Image.fromarray(as_u8_rgb(rec[k])).resize(
-            (IMG_DISPLAY, IMG_DISPLAY), Image.BILINEAR))
-        for k in CAM_IMAGE_KEYS
-    ]
+def process_one_token(
+    rec: dict,
+    imgs: List[np.ndarray],
+    action_token_idx: int,
+    task_labels, task_idx,
+    state_labels, state_idx,
+    cam_spans, task_sp, state_sp,
+    raw_w_full, vnorm_full, vcosine_full, vcombined_full,
+    out_png: str,
+) -> None:
     H = W = row_h = IMG_DISPLAY
     Hp, Wp = IMAGE_PATCH_GRID
 
-    # ── Token labels — content only, prefix/suffix stripped ──────────────────
-    task_labels,  task_idx  = get_token_labels(rec, "task",  strip_prefix="Task: ",  strip_suffix=", ")
-    state_labels, state_idx = get_token_labels(rec, "state", strip_prefix="State: ", strip_suffix=";\n")
     task_col_w  = len(task_labels)  * TASK_TILE_W
     state_col_w = len(state_labels) * STATE_TILE_W
-
-    # ── Shared attention precomputation ──────────────────────────────────────
-    cam_spans         = _cam_spans(rec)
-    task_sp, state_sp = _text_spans(rec)
-    sel_idx, tgt_idx  = _layer_indices(rec)
-    full_attn = np.asarray(rec[FULL_ATTN_KEY])   # (L, B, H, S)
-    full_v    = np.asarray(rec[FULL_V_KEY])       # (L, B, S, K, D)  K=1 for GQA
-    top_heads = select_heads(full_attn[sel_idx, 0], cam_spans, task_sp, state_sp, TOP_K_HEADS)
-    attn      = full_attn[tgt_idx, 0]             # (H, S)
-    v         = full_v[tgt_idx, 0]               # (S, K, D)
-
-    raw_w_full      = attn[top_heads].max(axis=0)            # (S,)
-    vnorm_full      = score_v_norm(attn, v, top_heads)       # (S,)
-    vcosine_full    = score_v_cosine(attn, v, top_heads)     # (S,)
-    vcombined_full  = score_v_combined(attn, v, top_heads)   # (S,)
 
     def _patch(s: np.ndarray) -> List[np.ndarray]:
         return [s[s0:s1].reshape(Hp, Wp) for s0, s1 in cam_spans]
@@ -212,21 +199,19 @@ def process_one(npy_path: str, out_png: str) -> None:
     def _state_slice(s: np.ndarray) -> np.ndarray:
         return s[state_sp[0]:state_sp[1]].astype(np.float32) if state_sp else np.zeros(0, np.float32)
 
-    # ── Per-method image heatmaps ─────────────────────────────────────────────
     image_heats: List[List[np.ndarray]] = [
-        _heatmaps_gradcam(rec),
-        _heatmaps_raw_alpha(rec),
+        _heatmaps_gradcam(rec, action_token_idx),
+        _heatmaps_raw_alpha(rec, action_token_idx),
         log_normalize_joint(_patch(raw_w_full)),
         log_normalize_joint(_patch(vnorm_full)),
         normalize_joint(_patch(vcosine_full)),
         log_normalize_joint(_patch(vcombined_full)),
     ]
 
-    # ── Per-method token scores (content tokens only, indexed by task/state_idx) ─
     task_scores_per_method: List[np.ndarray] = [
         ts[task_idx] for ts in [
-            rec["outputs/debug/gradcam/task"][0].astype(np.float32),
-            rec["outputs/debug/raw_alpha/summation/task"][0].astype(np.float32),
+            rec[f"outputs/debug/gradcam/action_tokens/{action_token_idx}/task"][0].astype(np.float32),
+            rec[f"outputs/debug/raw_alpha/summation/action_tokens/{action_token_idx}/task"][0].astype(np.float32),
             _task_slice(raw_w_full),
             _task_slice(vnorm_full),
             _task_slice(vcosine_full),
@@ -235,8 +220,8 @@ def process_one(npy_path: str, out_png: str) -> None:
     ]
     state_scores_per_method: List[np.ndarray] = [
         ss[state_idx] for ss in [
-            rec["outputs/debug/gradcam/state"][0].astype(np.float32),
-            rec["outputs/debug/raw_alpha/summation/state"][0].astype(np.float32),
+            rec[f"outputs/debug/gradcam/action_tokens/{action_token_idx}/state"][0].astype(np.float32),
+            rec[f"outputs/debug/raw_alpha/summation/action_tokens/{action_token_idx}/state"][0].astype(np.float32),
             _state_slice(raw_w_full),
             _state_slice(vnorm_full),
             _state_slice(vcosine_full),
@@ -244,7 +229,6 @@ def process_one(npy_path: str, out_png: str) -> None:
         ]
     ]
 
-    # ── Token strip images ────────────────────────────────────────────────────
     task_strips = [
         render_token_strip_as_image(_clip_normalize_1d(ts), task_labels,  row_h, TASK_TILE_W,  _TOKEN_FONT, bg=BG)
         for ts in task_scores_per_method
@@ -254,7 +238,6 @@ def process_one(npy_path: str, out_png: str) -> None:
         for ss in state_scores_per_method
     ]
 
-    # ── Overlay image rows ────────────────────────────────────────────────────
     def _overlays(heats: List[np.ndarray]) -> List[np.ndarray]:
         return [
             overlay_heatmap(img, resize_heatmap(h01, (H, W), SMOOTHING), ALPHA)
@@ -263,7 +246,6 @@ def process_one(npy_path: str, out_png: str) -> None:
 
     cell_rows: List[List[np.ndarray]] = [list(imgs)] + [_overlays(h) for h in image_heats]
 
-    # ── Assemble canvas ───────────────────────────────────────────────────────
     n_rows = len(ROW_LABELS)
     n_cams = len(CAM_IMAGE_KEYS)
 
@@ -276,11 +258,10 @@ def process_one(npy_path: str, out_png: str) -> None:
     canvas   = Image.new("RGB", (canvas_w, canvas_h), BG)
     draw     = ImageDraw.Draw(canvas)
 
-    # Column headers
-    for lbl, x0, cw in zip(COL_LABELS, x_cam + [x_task, x_state], [W, W, task_col_w, state_col_w]):
+    header_labels = [f"Base Cam (tok {action_token_idx})", f"Wrist Cam (tok {action_token_idx})", "Task", "State"]
+    for lbl, x0, cw in zip(header_labels, x_cam + [x_task, x_state], [W, W, task_col_w, state_col_w]):
         _draw_centered(draw, lbl, x0, GAP_Y, cw, HEADER_H)
 
-    # Data rows
     for r, (row_lbl, cells) in enumerate(zip(ROW_LABELS, cell_rows)):
         y0 = GAP_Y + HEADER_H + r * (GAP_Y + row_h) + GAP_Y
         _draw_centered(draw, row_lbl, GAP_X, y0, LABEL_W, row_h)
@@ -297,6 +278,55 @@ def process_one(npy_path: str, out_png: str) -> None:
 
 
 # ============================================================
+# PER-STEP ENTRY POINT  (loads record once, renders all tokens)
+# ============================================================
+def process_one(npy_path: str, ep_subdir: Path, s: int) -> None:
+    rec  = load_record(npy_path)
+    imgs = [
+        np.array(Image.fromarray(as_u8_rgb(rec[k])).resize(
+            (IMG_DISPLAY, IMG_DISPLAY), Image.BILINEAR))
+        for k in CAM_IMAGE_KEYS
+    ]
+
+    # Token labels — computed once, shared across all action tokens
+    task_labels,  task_idx  = get_token_labels(rec, "task",  strip_prefix="Task: ",  strip_suffix=", ")
+    state_labels, state_idx = get_token_labels(rec, "state", strip_prefix="State: ", strip_suffix=";\n")
+
+    # Attention precomputation — same for all action tokens
+    cam_spans         = _cam_spans(rec)
+    task_sp, state_sp = _text_spans(rec)
+    sel_idx, tgt_idx  = _layer_indices(rec)
+    full_attn = np.asarray(rec[FULL_ATTN_KEY])
+    full_v    = np.asarray(rec[FULL_V_KEY])
+    top_heads = select_heads(full_attn[sel_idx, 0], cam_spans, task_sp, state_sp, TOP_K_HEADS)
+    attn      = full_attn[tgt_idx, 0]
+    v         = full_v[tgt_idx, 0]
+
+    raw_w_full     = attn[top_heads].max(axis=0)
+    vnorm_full     = score_v_norm(attn, v, top_heads)
+    vcosine_full   = score_v_cosine(attn, v, top_heads)
+    vcombined_full = score_v_combined(attn, v, top_heads)
+
+    # One PNG per action token, all written into the same step folder
+    for token_idx in range(NUM_ACTION_TOKENS):
+        out_png = str(
+            Path(OUTPUT_DIR)
+            / ep_subdir
+            / f"step_{s:06d}"
+            / f"action_token_{token_idx}.png"
+        )
+        process_one_token(
+            rec, imgs, token_idx,
+            task_labels, task_idx,
+            state_labels, state_idx,
+            cam_spans, task_sp, state_sp,
+            raw_w_full, vnorm_full, vcosine_full, vcombined_full,
+            out_png,
+        )
+        print(f"  [tok {token_idx}] {out_png}")
+
+
+# ============================================================
 # MAIN
 # ============================================================
 def main() -> None:
@@ -310,16 +340,14 @@ def main() -> None:
         raise FileNotFoundError(f"No step_*.npy found in {INPUT_DIR}")
 
     for f in files:
-        s   = step_index(f)
-        ep  = episode_for_step(s, episodes)
-        out = str(
-            out_dir
-            / f"t{ep.task_id}_{slugify(ep.task)}"
+        s  = step_index(f)
+        ep = episode_for_step(s, episodes)
+        ep_subdir = (
+            Path(f"t{ep.task_id}_{slugify(ep.task)}")
             / f"ep{ep.episode_num}_{str(ep.success).lower()}"
-            / f"step_{s:06d}.png"
         )
-        process_one(f, out)
-        print(f"[OK] {out}")
+        print(f"[step {s}]")
+        process_one(f, ep_subdir, s)
 
 
 if __name__ == "__main__":
