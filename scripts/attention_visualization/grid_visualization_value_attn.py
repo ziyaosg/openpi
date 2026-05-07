@@ -84,24 +84,27 @@ LAYERS_KEY    = "outputs/debug/attn/layers"
 # ============================================================
 # HEAD SELECTION  (same logic as grid_visualization_raw_weights)
 # ============================================================
-def _select_heads(
+def _select_heads_for_span(
     layer_attn: np.ndarray,
-    all_img_spans: List[Tuple[int, int]],
-    task_span: Tuple[int, int] | None,
-    state_span: Tuple[int, int] | None,
+    span: Tuple[int, int],
+    all_spans: List[Tuple[int, int]],
     top_k: int,
 ) -> np.ndarray:
-    H = layer_attn.shape[0]
-    img_budget = np.zeros(H, dtype=np.float32)
-    for s0, s1 in all_img_spans:
-        img_budget += layer_attn[:, s0:s1].sum(axis=1)
-    text_budget = np.zeros(H, dtype=np.float32)
-    if task_span is not None:
-        text_budget += layer_attn[:, task_span[0]:task_span[1]].sum(axis=1)
-    if state_span is not None:
-        text_budget += layer_attn[:, state_span[0]:state_span[1]].sum(axis=1)
-    ratio = img_budget / (text_budget + 1e-9)
-    return np.argsort(ratio)[-min(top_k, H):]
+    """Return top_k heads ranked by one-vs-rest ratio for the given span.
+
+    ratio[h] = budget(h, span) / budget(h, all other spans)
+
+    This identifies heads that specifically prefer this span over all others,
+    rather than heads that simply attend a lot in absolute terms.
+    """
+    s0, s1 = span
+    target_budget = layer_attn[:, s0:s1].sum(axis=1)   # (H,)
+    other_budget  = np.zeros(layer_attn.shape[0], dtype=np.float32)
+    for sp in all_spans:
+        if sp != span:
+            other_budget += layer_attn[:, sp[0]:sp[1]].sum(axis=1)
+    ratio = target_budget / (other_budget + 1e-9)
+    return np.argsort(ratio)[-min(top_k, layer_attn.shape[0]):]
 
 
 # ============================================================
@@ -123,14 +126,15 @@ def score_v_cosine(
     v: np.ndarray,      # (S, K, D)  K=1 for GQA
     top_heads: np.ndarray,
 ) -> np.ndarray:
-    """|cosine(v[s,0,:], o_h)| where o_h = attn[h,:] @ v[:,0,:],
-    then max over selected heads → (S,)."""
+    """cosine(v[s,0,:], o_h) where o_h = attn[h,:] @ v[:,0,:],
+    then max over selected heads → (S,). Values in [-1, 1]; only
+    positively-aligned tokens score high."""
     v0 = v[:, 0, :]                                                          # (S, D)
     o = attn @ v0                                                            # (H, D)
     o_unit = o / (np.linalg.norm(o, axis=-1, keepdims=True) + 1e-9)         # (H, D)
     v_unit = v0 / (np.linalg.norm(v0, axis=-1, keepdims=True) + 1e-9)       # (S, D)
     cos = v_unit @ o_unit.T                                                  # (S, H)
-    return np.abs(cos)[:, top_heads].max(axis=1).astype(np.float32)
+    return cos[:, top_heads].max(axis=1).astype(np.float32)
 
 
 def score_v_combined(
@@ -163,7 +167,7 @@ def _normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
 
 
 def _normalize_cosine_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
-    """Joint min-max for cosine scores which are already in [0, 1]."""
+    """Joint min-max for cosine scores in [-1, 1]."""
     flat = np.concatenate([h.reshape(-1) for h in heats])
     mn, mx = float(flat.min()), float(flat.max())
     scale = (mx - mn) if mx > mn else 1.0
@@ -200,13 +204,9 @@ def process_one(npy_path: str, out_png: str) -> None:
     if "outputs/debug/spans/state" in rec:
         state_span = tuple(int(x) for x in np.asarray(rec["outputs/debug/spans/state"]).tolist())
 
-    # Two-stage head selection.
     selector_attn = full_attn[sel_idx, 0, :, :]     # (H, S)
-    top_heads = _select_heads(selector_attn, cam_spans, task_span, state_span, TOP_K_HEADS)
-    print(f"  heads (layer {HEAD_SELECTION_LAYER} → layer {TARGET_LAYER}): {sorted(int(h) for h in top_heads)}")
-
-    attn   = full_attn[target_idx, 0, :, :]          # (H, S)
-    v      = full_v[target_idx, 0, :, :, :]          # (S, H, D)
+    attn          = full_attn[target_idx, 0, :, :]  # (H, S)
+    v             = full_v[target_idx, 0, :, :, :]  # (S, K, D)
 
     if MODE == "v_norm":
         score_fn = score_v_norm
@@ -217,12 +217,18 @@ def process_one(npy_path: str, out_png: str) -> None:
     else:
         raise ValueError(f"Unknown MODE {MODE!r}. Choose 'v_norm', 'v_cosine', or 'v_combined'.")
 
-    full_score = score_fn(attn, v, top_heads)    # (S,)
+    # Per-modality head selection: for each modality pick the top-K heads by
+    # one-vs-rest ratio at HEAD_SELECTION_LAYER, then score at TARGET_LAYER.
+    if task_span is None or state_span is None:
+        raise KeyError("task/state spans missing — cannot build text panel")
+    all_spans = list(cam_spans) + [task_span, state_span]
 
     Hp, Wp = IMAGE_PATCH_GRID
     heats, imgs = [], []
     for span, (cam_name, img_key) in zip(cam_spans, zip(CAM_NAMES, CAM_IMAGE_KEYS)):
-        cam_scores = full_score[span[0]:span[1]]
+        heads      = _select_heads_for_span(selector_attn, span, all_spans, TOP_K_HEADS)
+        cam_scores = score_fn(attn, v, heads)[span[0]:span[1]]
+        print(f"  {cam_name} heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in heads)}")
         if cam_scores.size != Hp * Wp:
             raise ValueError(f"{cam_name}: span length {cam_scores.size} != {Hp}×{Wp}={Hp*Wp}")
         heats.append(cam_scores.reshape(Hp, Wp))
@@ -244,10 +250,12 @@ def process_one(npy_path: str, out_png: str) -> None:
 
     grid = make_grid(overlays, originals, bg=BG, gap_x=GAP_X, gap_y=GAP_Y)
 
-    task_scores  = full_score[task_span[0]:task_span[1]]   if task_span  is not None else None
-    state_scores = full_score[state_span[0]:state_span[1]] if state_span is not None else None
-    if task_scores is None or state_scores is None:
-        raise KeyError("task/state spans missing — cannot build text panel")
+    task_heads   = _select_heads_for_span(selector_attn, task_span,  all_spans, TOP_K_HEADS)
+    state_heads  = _select_heads_for_span(selector_attn, state_span, all_spans, TOP_K_HEADS)
+    task_scores  = score_fn(attn, v, task_heads)[task_span[0]:task_span[1]]
+    state_scores = score_fn(attn, v, state_heads)[state_span[0]:state_span[1]]
+    print(f"  task  heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in task_heads)}")
+    print(f"  state heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in state_heads)}")
     text_panel = render_text_panel_from_token_scores(rec, task_scores, state_scores, grid.height)
 
     combined = Image.new("RGB", (grid.width + GAP_X + text_panel.width, grid.height), BG)

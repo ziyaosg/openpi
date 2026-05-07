@@ -34,7 +34,7 @@ import numpy as np
 from scipy.stats import wasserstein_distance
 
 from scripts.attention_visualization.grid_visualization_raw_weights import (
-    select_heads, TARGET_LAYER, HEAD_SELECTION_LAYER, TOP_K_HEADS,
+    select_heads, select_heads_for_span, TARGET_LAYER, HEAD_SELECTION_LAYER, TOP_K_HEADS,
 )
 from scripts.attention_visualization.grid_visualization_value_attn import score_v_cosine
 from scripts.attention_visualization.grid_visualization_gradcam import to_2d_heatmap
@@ -59,8 +59,11 @@ FULL_ATTN_KEY = "outputs/debug/attn/weights"
 FULL_V_KEY    = "outputs/debug/attn/v"
 LAYERS_KEY    = "outputs/debug/attn/layers"
 
-METHOD_NAMES = ["GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
-METHOD_PAIRS = list(combinations(range(len(METHOD_NAMES)), 2))
+METHOD_NAMES  = ["GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
+METHOD_SHORT  = ["gc",      "ra",        "rw",           "vc"]
+METHOD_PAIRS  = list(combinations(range(len(METHOD_NAMES)), 2))
+PAIR_NAMES    = [f"{METHOD_SHORT[i]}_{METHOD_SHORT[j]}" for i, j in METHOD_PAIRS]
+PAIR_LABELS   = [f"{METHOD_NAMES[i]} vs {METHOD_NAMES[j]}" for i, j in METHOD_PAIRS]
 
 # Plot style
 COL_S_MEAN = "#1f5fa6"
@@ -143,19 +146,17 @@ def _emd(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _cam_agreement(heats: list) -> dict:
-    """Compute mean of each metric across all method pairs for one camera."""
-    cos, iou, com, emd = [], [], [], []
-    for i, j in METHOD_PAIRS:
-        cos.append(_cos_sim(heats[i], heats[j]))
-        iou.append(_topk_iou(heats[i], heats[j]))
-        com.append(_com_distance(heats[i], heats[j]))
-        emd.append(_emd(heats[i], heats[j]))
-    return {
-        "cosine":   float(np.mean(cos)),
-        "iou":      float(np.mean(iou)),
-        "com_dist": float(np.mean(com)),
-        "emd":      float(np.mean(emd)),
-    }
+    """Compute each metric for every method pair separately for one camera.
+    Returns {pair_name: {metric: value}}."""
+    result = {}
+    for (i, j), pname in zip(METHOD_PAIRS, PAIR_NAMES):
+        result[pname] = {
+            "cosine":   _cos_sim(heats[i], heats[j]),
+            "iou":      _topk_iou(heats[i], heats[j]),
+            "com_dist": _com_distance(heats[i], heats[j]),
+            "emd":      _emd(heats[i], heats[j]),
+        }
+    return result
 
 
 def _com_distance_1d(a: np.ndarray, b: np.ndarray) -> float:
@@ -188,20 +189,18 @@ def _topk_iou_k(a: np.ndarray, b: np.ndarray, k: int) -> float:
 
 
 def _tok_agreement(scores: list) -> dict:
-    """Compute mean of each 1-D metric across all method pairs for one token modality."""
+    """Compute each 1-D metric for every method pair separately for one token modality.
+    Returns {pair_name: {metric: value}}."""
     k = max(1, int(round(len(scores[0].ravel()) * 0.10)))
-    cos, iou, com, emd = [], [], [], []
-    for i, j in METHOD_PAIRS:
-        cos.append(_cos_sim(scores[i], scores[j]))
-        iou.append(_topk_iou_k(scores[i], scores[j], k))
-        com.append(_com_distance_1d(scores[i], scores[j]))
-        emd.append(_emd_1d(scores[i], scores[j]))
-    return {
-        "cosine":   float(np.mean(cos)),
-        "iou":      float(np.mean(iou)),
-        "com_dist": float(np.mean(com)),
-        "emd":      float(np.mean(emd)),
-    }
+    result = {}
+    for (i, j), pname in zip(METHOD_PAIRS, PAIR_NAMES):
+        result[pname] = {
+            "cosine":   _cos_sim(scores[i], scores[j]),
+            "iou":      _topk_iou_k(scores[i], scores[j], k),
+            "com_dist": _com_distance_1d(scores[i], scores[j]),
+            "emd":      _emd_1d(scores[i], scores[j]),
+        }
+    return result
 
 
 def _layer_indices(rec: dict) -> Tuple[int, int]:
@@ -230,8 +229,15 @@ def extract(rec: dict) -> dict:
     attn_tgt = full_attn[tgt_idx, 0]  # (H, S)  target layer
     v_tgt    = full_v[tgt_idx, 0]     # (S, K, D)
 
-    all_cam_spans = [sp_base] + sp_wrists
-    top_heads = select_heads(attn_sel, all_cam_spans, sp_task, sp_state, TOP_K_HEADS)
+    # ── Per-modality one-vs-rest head selection ───────────────────────────────
+    all_spans: List[Tuple[int, int]] = [sp_base] + sp_wrists
+    if sp_task:  all_spans.append(sp_task)
+    if sp_state: all_spans.append(sp_state)
+
+    base_heads  = select_heads_for_span(attn_sel, sp_base,       all_spans, TOP_K_HEADS)
+    task_heads  = select_heads_for_span(attn_sel, sp_task,       all_spans, TOP_K_HEADS) if sp_task  else None
+    state_heads = select_heads_for_span(attn_sel, sp_state,      all_spans, TOP_K_HEADS) if sp_state else None
+    wrist_heads = select_heads_for_span(attn_sel, sp_wrists[0],  all_spans, TOP_K_HEADS) if sp_wrists else None
 
     # ── Attention concentration (base cam, mean over all heads) ───────────────
     base_attn = attn_tgt[:, sp_base[0]:sp_base[1]].mean(axis=0)  # (N_patches,)
@@ -247,12 +253,12 @@ def extract(rec: dict) -> dict:
     task_frac  = _frac(sp_task)
     state_frac = _frac(sp_state)
 
-    # ── Task-token inter-head agreement (selected heads only) ─────────────────
-    if sp_task and len(top_heads) > 1:
-        h_task = attn_tgt[top_heads][:, sp_task[0]:sp_task[1]]  # (K, N_task)
+    # ── Task-token inter-head agreement (task-focused heads) ──────────────────
+    if sp_task and task_heads is not None and len(task_heads) > 1:
+        h_task = attn_tgt[task_heads][:, sp_task[0]:sp_task[1]]  # (K, N_task)
         h_n = h_task / (np.linalg.norm(h_task, axis=1, keepdims=True) + 1e-9)
-        sim = h_n @ h_n.T                                        # (K, K)
-        iu = np.triu_indices(len(top_heads), k=1)
+        sim = h_n @ h_n.T                                         # (K, K)
+        iu = np.triu_indices(len(task_heads), k=1)
         task_head_agr = float(sim[iu].mean())
     else:
         task_head_agr = float("nan")
@@ -264,30 +270,27 @@ def extract(rec: dict) -> dict:
     rot_flip   = float(flips[:, 3:6].mean())   # rotation dims 3-5
     grip_flip  = float(flips[:, 6].mean())     # gripper dim 6
 
-    # ── Attribution heatmap method agreement (base cam) ───────────────────────
-    raw_w = attn_tgt[top_heads].max(axis=0)                      # (S,)
-    vcos  = score_v_cosine(attn_tgt, v_tgt, top_heads)           # (S,) already abs
-
+    # ── Attribution agreement — base cam (base-focused heads for rw/vc) ───────
     gc_h = np.abs(to_2d_heatmap(
         np.asarray(rec[f"outputs/debug/gradcam/image/{CAM_BASE}"]), CAM_BASE))
     ra_h = np.abs(to_2d_heatmap(
         np.asarray(rec[f"outputs/debug/raw_alpha/summation/image/{CAM_BASE}"]), CAM_BASE))
-    rw_h = raw_w[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
-    vc_h = vcos[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
-
+    rw_h = attn_tgt[base_heads, sp_base[0]:sp_base[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
+    vc_h = score_v_cosine(attn_tgt, v_tgt, base_heads)[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
     base_agr = _cam_agreement([gc_h, ra_h, rw_h, vc_h])
 
-    # ── Left wrist cam — agreement + Gini ─────────────────────────────────────
-    _nan4  = {k: float("nan") for k in ("cosine", "iou", "com_dist", "emd")}
+    # ── Attribution agreement — wrist cam (wrist-focused heads for rw/vc) ─────
+    _nan_metrics = {"cosine": float("nan"), "iou": float("nan"), "com_dist": float("nan"), "emd": float("nan")}
+    _nan4  = {pname: _nan_metrics for pname in PAIR_NAMES}
     _nan_g = (float("nan"),) * 4
-    if sp_wrists:
+    if sp_wrists and wrist_heads is not None:
         sp_w, cam_w = sp_wrists[0], CAM_WRISTS[0]
         gc_hw = np.abs(to_2d_heatmap(
             np.asarray(rec[f"outputs/debug/gradcam/image/{cam_w}"]), cam_w))
         ra_hw = np.abs(to_2d_heatmap(
             np.asarray(rec[f"outputs/debug/raw_alpha/summation/image/{cam_w}"]), cam_w))
-        rw_hw = raw_w[sp_w[0]:sp_w[1]].reshape(PATCH_H, PATCH_W)
-        vc_hw = vcos[sp_w[0]:sp_w[1]].reshape(PATCH_H, PATCH_W)
+        rw_hw = attn_tgt[wrist_heads, sp_w[0]:sp_w[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
+        vc_hw = score_v_cosine(attn_tgt, v_tgt, wrist_heads)[sp_w[0]:sp_w[1]].reshape(PATCH_H, PATCH_W)
         wrist_agr  = _cam_agreement([gc_hw, ra_hw, rw_hw, vc_hw])
         wrist_gini = (_gini(gc_hw.ravel()), _gini(ra_hw.ravel()),
                       _gini(rw_hw.ravel()), _gini(vc_hw.ravel()))
@@ -295,24 +298,24 @@ def extract(rec: dict) -> dict:
         wrist_agr  = _nan4
         wrist_gini = _nan_g
 
-    # ── Task tokens — agreement + Gini ───────────────────────────────────────
-    if sp_task:
+    # ── Attribution agreement — task tokens (task-focused heads for rw/vc) ────
+    if sp_task and task_heads is not None:
         gc_task = np.abs(np.asarray(rec["outputs/debug/gradcam/task"])[0])
         ra_task = np.abs(np.asarray(rec["outputs/debug/raw_alpha/summation/task"])[0])
-        rw_task = raw_w[sp_task[0]:sp_task[1]]
-        vc_task = vcos[sp_task[0]:sp_task[1]]
+        rw_task = attn_tgt[task_heads, sp_task[0]:sp_task[1]].max(axis=0)
+        vc_task = score_v_cosine(attn_tgt, v_tgt, task_heads)[sp_task[0]:sp_task[1]]
         task_agr  = _tok_agreement([gc_task, ra_task, rw_task, vc_task])
         task_gini = (_gini(gc_task), _gini(ra_task), _gini(rw_task), _gini(vc_task))
     else:
         task_agr  = _nan4
         task_gini = _nan_g
 
-    # ── State tokens — agreement + Gini ──────────────────────────────────────
-    if sp_state:
+    # ── Attribution agreement — state tokens (state-focused heads for rw/vc) ──
+    if sp_state and state_heads is not None:
         gc_state = np.abs(np.asarray(rec["outputs/debug/gradcam/state"])[0])
         ra_state = np.abs(np.asarray(rec["outputs/debug/raw_alpha/summation/state"])[0])
-        rw_state = raw_w[sp_state[0]:sp_state[1]]
-        vc_state = vcos[sp_state[0]:sp_state[1]]
+        rw_state = attn_tgt[state_heads, sp_state[0]:sp_state[1]].max(axis=0)
+        vc_state = score_v_cosine(attn_tgt, v_tgt, state_heads)[sp_state[0]:sp_state[1]]
         state_agr  = _tok_agreement([gc_state, ra_state, rw_state, vc_state])
         state_gini = (_gini(gc_state), _gini(ra_state), _gini(rw_state), _gini(vc_state))
     else:
@@ -351,26 +354,11 @@ def extract(rec: dict) -> dict:
         "trans_flip":        trans_flip,
         "rot_flip":          rot_flip,
         "grip_flip":         grip_flip,
-        # attribution agreement — base cam
-        "base_cosine":       base_agr["cosine"],
-        "base_iou":          base_agr["iou"],
-        "base_com_dist":     base_agr["com_dist"],
-        "base_emd":          base_agr["emd"],
-        # attribution agreement — wrist cam
-        "wrist_cosine":      wrist_agr["cosine"],
-        "wrist_iou":         wrist_agr["iou"],
-        "wrist_com_dist":    wrist_agr["com_dist"],
-        "wrist_emd":         wrist_agr["emd"],
-        # attribution agreement — task tokens
-        "task_cosine":       task_agr["cosine"],
-        "task_iou":          task_agr["iou"],
-        "task_com_dist":     task_agr["com_dist"],
-        "task_emd":          task_agr["emd"],
-        # attribution agreement — state tokens
-        "state_cosine":      state_agr["cosine"],
-        "state_iou":         state_agr["iou"],
-        "state_com_dist":    state_agr["com_dist"],
-        "state_emd":         state_agr["emd"],
+        # attribution agreement — per pair, per modality
+        **{f"base_{pname}_{m}":  base_agr[pname][m]  for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"wrist_{pname}_{m}": wrist_agr[pname][m] for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"task_{pname}_{m}":  task_agr[pname][m]  for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"state_{pname}_{m}": state_agr[pname][m] for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
         "_state":            state,
         "_action0":          actions[0].copy(),
     }
@@ -551,48 +539,50 @@ def fig4_motion_consensus(ep_data: EpData):
     _save(fig, axes, "fig4_motion_consensus.png")
 
 
-def _attribution_fig(ep_data: EpData, cam_prefix: str, cam_label: str, fname: str):
-    """4-row attribution agreement figure for one camera."""
-    specs = [
-        (f"{cam_prefix}_cosine",   "Cosine sim",     "Cosine similarity  (↑ more similar)"),
-        (f"{cam_prefix}_iou",      "Top-10% IoU",    f"Top-{TOPK_PATCHES} patch IoU  (↑ more similar)"),
-        (f"{cam_prefix}_com_dist", "Dist (patches)", "Centre-of-mass distance  (↓ more similar)"),
-        (f"{cam_prefix}_emd",      "EMD (patches)",  "Earth Mover's Distance — x/y marginals  (↓ more similar)"),
-    ]
-    fig, axes = _make_fig(len(specs), f"Attribution Method Agreement — {cam_label} (mean across all method pairs)")
-    for ax, (key, yl, title) in zip(axes, specs):
-        _plot_row(ax, ep_data, key, yl, title)
-    _save(fig, axes, fname)
+def _attribution_fig(ep_data: EpData, cam_prefix: str, cam_label: str, fname_prefix: str):
+    """One 4-row figure per method pair for one camera."""
+    for pname, plabel in zip(PAIR_NAMES, PAIR_LABELS):
+        specs = [
+            (f"{cam_prefix}_{pname}_cosine",   "Cosine sim",     "Cosine similarity  (↑ more similar)"),
+            (f"{cam_prefix}_{pname}_iou",      "Top-10% IoU",    f"Top-{TOPK_PATCHES} patch IoU  (↑ more similar)"),
+            (f"{cam_prefix}_{pname}_com_dist", "Dist (patches)", "Centre-of-mass distance  (↓ more similar)"),
+            (f"{cam_prefix}_{pname}_emd",      "EMD (patches)",  "Earth Mover's Distance — x/y marginals  (↓ more similar)"),
+        ]
+        fig, axes = _make_fig(len(specs), f"Attribution Agreement — {cam_label} ({plabel})")
+        for ax, (key, yl, title) in zip(axes, specs):
+            _plot_row(ax, ep_data, key, yl, title)
+        _save(fig, axes, f"{fname_prefix}_{pname}.png")
 
 
-def _tok_attribution_fig(ep_data: EpData, prefix: str, label: str, fname: str):
-    """4-row attribution agreement figure for one token modality (task or state)."""
-    specs = [
-        (f"{prefix}_cosine",   "Cosine sim",    "Cosine similarity  (↑ more similar)"),
-        (f"{prefix}_iou",      "Top-10% IoU",   "Top-10% token IoU  (↑ more similar)"),
-        (f"{prefix}_com_dist", "Dist (tokens)", "Centre-of-mass distance  (↓ more similar)"),
-        (f"{prefix}_emd",      "EMD (tokens)",  "Earth Mover's Distance  (↓ more similar)"),
-    ]
-    fig, axes = _make_fig(len(specs), f"Attribution Method Agreement — {label} (mean across all method pairs)")
-    for ax, (key, yl, title) in zip(axes, specs):
-        _plot_row(ax, ep_data, key, yl, title)
-    _save(fig, axes, fname)
+def _tok_attribution_fig(ep_data: EpData, prefix: str, label: str, fname_prefix: str):
+    """One 4-row figure per method pair for one token modality (task or state)."""
+    for pname, plabel in zip(PAIR_NAMES, PAIR_LABELS):
+        specs = [
+            (f"{prefix}_{pname}_cosine",   "Cosine sim",    "Cosine similarity  (↑ more similar)"),
+            (f"{prefix}_{pname}_iou",      "Top-10% IoU",   "Top-10% token IoU  (↑ more similar)"),
+            (f"{prefix}_{pname}_com_dist", "Dist (tokens)", "Centre-of-mass distance  (↓ more similar)"),
+            (f"{prefix}_{pname}_emd",      "EMD (tokens)",  "Earth Mover's Distance  (↓ more similar)"),
+        ]
+        fig, axes = _make_fig(len(specs), f"Attribution Agreement — {label} ({plabel})")
+        for ax, (key, yl, title) in zip(axes, specs):
+            _plot_row(ax, ep_data, key, yl, title)
+        _save(fig, axes, f"{fname_prefix}_{pname}.png")
 
 
 def fig5_base_attribution(ep_data: EpData):
-    _attribution_fig(ep_data, "base", "Base Camera", "fig5_base_attribution.png")
+    _attribution_fig(ep_data, "base", "Base Camera", "fig5_base_attribution")
 
 
 def fig6_wrist_attribution(ep_data: EpData):
-    _attribution_fig(ep_data, "wrist", "Left Wrist Camera", "fig6_wrist_attribution.png")
+    _attribution_fig(ep_data, "wrist", "Left Wrist Camera", "fig6_wrist_attribution")
 
 
 def fig7_task_attribution(ep_data: EpData):
-    _tok_attribution_fig(ep_data, "task", "Task Tokens", "fig7_task_attribution.png")
+    _tok_attribution_fig(ep_data, "task", "Task Tokens", "fig7_task_attribution")
 
 
 def fig8_state_attribution(ep_data: EpData):
-    _tok_attribution_fig(ep_data, "state", "State Tokens", "fig8_state_attribution.png")
+    _tok_attribution_fig(ep_data, "state", "State Tokens", "fig8_state_attribution")
 
 
 
