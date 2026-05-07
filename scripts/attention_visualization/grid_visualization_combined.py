@@ -46,7 +46,7 @@ from .grid_visualization_raw_weights import (
     HEAD_SELECTION_LAYER,
     TOP_K_HEADS,
 )
-from .grid_visualization_value_attn import score_v_norm, score_v_cosine, score_v_combined
+from .grid_visualization_value_attn import score_v_cosine
 
 # ============================================================
 # CONFIG
@@ -77,7 +77,7 @@ STATE_TILE_W = 42   # state tokens are single-char numerals / spaces
 APPLY_RELU_GRADCAM  = True
 APPLY_ABS_RAW_ALPHA = True
 
-ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Norm", "V-Cosine", "V-Combined"]
+ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
 COL_LABELS = ["Base Camera", "Wrist Camera", "Task", "State"]
 
 FULL_ATTN_KEY = "outputs/debug/attn/weights"
@@ -199,9 +199,7 @@ def process_one(npy_path: str, out_png: str) -> None:
     v         = full_v[tgt_idx, 0]               # (S, K, D)
 
     raw_w_full      = attn[top_heads].max(axis=0)            # (S,)
-    vnorm_full      = score_v_norm(attn, v, top_heads)       # (S,)
     vcosine_full    = score_v_cosine(attn, v, top_heads)     # (S,)
-    vcombined_full  = score_v_combined(attn, v, top_heads)   # (S,)
 
     def _patch(s: np.ndarray) -> List[np.ndarray]:
         return [s[s0:s1].reshape(Hp, Wp) for s0, s1 in cam_spans]
@@ -217,9 +215,7 @@ def process_one(npy_path: str, out_png: str) -> None:
         _heatmaps_gradcam(rec),
         _heatmaps_raw_alpha(rec),
         log_normalize_joint(_patch(raw_w_full)),
-        log_normalize_joint(_patch(vnorm_full)),
         normalize_joint(_patch(vcosine_full)),
-        log_normalize_joint(_patch(vcombined_full)),
     ]
 
     # ── Per-method token scores (content tokens only, indexed by task/state_idx) ─
@@ -228,9 +224,7 @@ def process_one(npy_path: str, out_png: str) -> None:
             rec["outputs/debug/gradcam/task"][0].astype(np.float32),
             rec["outputs/debug/raw_alpha/summation/task"][0].astype(np.float32),
             _task_slice(raw_w_full),
-            _task_slice(vnorm_full),
             _task_slice(vcosine_full),
-            _task_slice(vcombined_full),
         ]
     ]
     state_scores_per_method: List[np.ndarray] = [
@@ -238,9 +232,7 @@ def process_one(npy_path: str, out_png: str) -> None:
             rec["outputs/debug/gradcam/state"][0].astype(np.float32),
             rec["outputs/debug/raw_alpha/summation/state"][0].astype(np.float32),
             _state_slice(raw_w_full),
-            _state_slice(vnorm_full),
             _state_slice(vcosine_full),
-            _state_slice(vcombined_full),
         ]
     ]
 
@@ -309,6 +301,7 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No step_*.npy found in {INPUT_DIR}")
 
+    skipped = 0
     for f in files:
         s   = step_index(f)
         ep  = episode_for_step(s, episodes)
@@ -318,8 +311,14 @@ def main() -> None:
             / f"ep{ep.episode_num}_{str(ep.success).lower()}"
             / f"step_{s:06d}.png"
         )
+        if Path(out).exists():
+            skipped += 1
+            continue
         process_one(f, out)
         print(f"[OK] {out}")
+
+    if skipped:
+        print(f"[skip] {skipped} already-existing files skipped.")
 
 
 if __name__ == "__main__":

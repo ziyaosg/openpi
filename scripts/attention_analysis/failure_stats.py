@@ -168,6 +168,13 @@ def extract_step_features(rec: dict) -> dict:
     #   fraction of horizon steps where gripper dim (index 6) > 0 (opening).
     gripper_open_frac = float((actions[:, 6] > 0).mean())
 
+    # [P2e+] NEW — Gripper open sign-flip rate:
+    #   fraction of consecutive horizon pairs where gripper dim changes sign.
+    #   Distinguishes hesitant oscillation (1010…) from committed transitions (1111…0000…),
+    #   both of which can yield the same gripper_open_frac.
+    gripper_signs = np.sign(actions[:, 6])
+    gripper_flip_rate = float((gripper_signs[1:] != gripper_signs[:-1]).mean())
+
     # [P2f] NEW — Action sign-flip rate:
     #   mean fraction of dims that change sign between consecutive horizon steps.
     signs = np.sign(actions)
@@ -218,6 +225,7 @@ def extract_step_features(rec: dict) -> dict:
         "state_attn_frac":     state_attn_frac,
         "vnorm_base":          vnorm_base,
         "gripper_open_frac":   gripper_open_frac,     # NEW P2e
+        "gripper_flip_rate":   gripper_flip_rate,     # NEW P2e+
         "sign_flip_rate":      sign_flip_rate,        # NEW P2f
         "head_ent_var":        head_ent_var,          # NEW P2g
         "v_proj_align":        v_proj_align,          # NEW P2h
@@ -569,6 +577,14 @@ def main():
         "  Interpretation: successful episodes consistently plan to open the gripper",
         "  while failures predict hesitant, half-open-half-closed motion.",
     ])
+    _formula("P2e+ [NEW]", [
+        "Gripper open sign-flip rate — fraction of consecutive horizon pairs where gripper changes sign:",
+        r"  \phi_{grip} = \frac{1}{T-1}\sum_{t=1}^{T-1}\mathbf{1}[\text{sgn}(a_{t,6}) \ne \text{sgn}(a_{t-1,6})]",
+        "  Companion to P2e: two episodes with the same f_grip can differ sharply here.",
+        "    • 11110000 → f_grip=0.5, φ_grip=0.111  (one clean transition, committed)",
+        "    • 10101010 → f_grip=0.5, φ_grip=0.778  (oscillating, indecisive)",
+        "  High φ_grip = model cannot commit to open/close → grip uncertainty in phase 2.",
+    ])
     _formula("P2f [NEW]", [
         "Action sign-flip rate — mean fraction of dims whose sign flips each horizon step:",
         r"  \phi_{flip} = \frac{1}{(T-1)D}\sum_{t=1}^{T-1}\sum_d \mathbf{1}[\text{sgn}(a_{t,d}) \ne \text{sgn}(a_{t-1,d})]",
@@ -621,11 +637,12 @@ def main():
         ("img_attn_frac",     "img_frac",  "8.5f"),
         ("task_attn_frac",    "task_frac", "8.5f"),
         ("state_vel",         "state_vel", "8.5f"),
-        ("gripper_open_frac", "grip_open", "8.4f"),  # NEW
+        ("gripper_open_frac", "grip_open", "8.4f"),  # NEW P2e
+        ("gripper_flip_rate", "grp_flip",  "8.4f"),  # NEW P2e+
         ("joint_vel_entropy", "jv_ent",    "8.4f"),  # NEW
     ]
     _print_episode_table(ep_rows_p2, cols_p2a)
-    _section("SUMMARY STATISTICS  (img_frac / task_frac / state_vel / grip_open / jv_ent)")
+    _section("SUMMARY STATISTICS  (img_frac / task_frac / state_vel / grip_open / grp_flip / jv_ent)")
     _print_summary(ep_rows_p2, cols_p2a)
 
     _section("PER-EPISODE VALUES  (mean over steps 10–24) — new attention features")
@@ -643,6 +660,11 @@ def main():
     _section("STEP-BY-STEP  —  gripper_open_frac  (every 2 steps, steps 10–24)  [NEW ★★★]")
     print("  Fraction of 10-step horizon steps where gripper dim > 0 (opening planned).")
     _print_temporal_table(ep_data, "gripper_open_frac", PHASE2_STEPS, fmt="7.4f", every_n=2)
+
+    _section("STEP-BY-STEP  —  gripper_flip_rate  (every 2 steps, steps 10–24)  [NEW P2e+]")
+    print("  Fraction of consecutive horizon pairs where gripper sign flips (open↔close).")
+    print("  High = oscillating grip command; low = committed trajectory (even if f_grip=0.5).")
+    _print_temporal_table(ep_data, "gripper_flip_rate", PHASE2_STEPS, fmt="7.4f", every_n=2)
 
     _section("STEP-BY-STEP  —  joint_vel_entropy  (every 2 steps, steps 10–24)  [NEW ★★★]")
     print("  High entropy = balanced joint motion. Low = one joint thrashing.")
@@ -708,6 +730,7 @@ def main():
         ("task_head_agr",      "P1e NEW","0–9",    "p=0.009 ★★ ", "S>F", "Heads agree on task words in successes"),
         ("img_attn_frac",      "P2a",    "~step8", "crossing   ", "↕",   "Direction reversal: success > failure after crossing"),
         ("gripper_open_frac",  "P2e NEW","10–24",  "p=0.0001 ★★★","S>F","Planned gripper opening (83% vs 59%)"),
+        ("gripper_flip_rate",  "P2e+NEW","10–24",  "TBD        ","F>S","Oscillating grip: disambiguates 10101010 vs 11110000"),
         ("joint_vel_entropy",  "P2j NEW","10–24",  "p=0.0001 ★★★","S>F","Coordinated joint motion vs one-joint thrash"),
         ("sign_flip_rate",     "P2f NEW","10–24",  "p=0.006 ★★ ", "F>S","Oscillating action plan"),
         ("task_attn_frac",     "P2b",    "10–24",  "growing gap", "F>S","Re-reading instruction"),
@@ -734,6 +757,7 @@ def main():
     print()
     print("  ── By step 15 (first reliable window):")
     print("    • gripper_open_frac   [P2e]  — ★★★ most powerful new feature")
+    print("    • gripper_flip_rate   [P2e+] — companion: catches oscillating grip (10101010 vs 11110000)")
     print("    • joint_vel_entropy   [P2j]  — ★★★ equally powerful")
     print("    • sign_flip_rate      [P2f]  — ★★  oscillating plan")
     print("    • img_attn_frac slope [P2a]  — visual grounding drift")
