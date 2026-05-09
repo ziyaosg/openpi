@@ -31,15 +31,16 @@ INPUT_DIR              = "/home/ziyao/Documents/policy_records_20260423_180932"
 OUTPUT_DIR             = "/home/ziyao/Documents/policy_records_20260423_180932/heatmap_raw_weights"
 EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260423_180932/episode_summaries.json"
 
-# Layer whose attention is used for the final heatmap.
+# Layer whose attention is used for both head selection and the final heatmap.
 TARGET_LAYER = 16
 
-# Layer used only for head selection.  Layer 1 puts ~55 % of its budget into
-# image tokens and its head ranking is stable across steps.
-HEAD_SELECTION_LAYER = 1
-
-# How many top image-focused heads to include.
+# Number of top heads to include per modality.
 TOP_K_HEADS = 3
+
+# Head selection strategy:
+#   "ratio"  — one-vs-rest: budget(h, span) / budget(h, all other spans)
+#   "budget" — raw attention mass to the span: budget(h, span)
+HEAD_SELECTION_MODE = "ratio"
 
 
 ALPHA      = 0.30
@@ -53,54 +54,32 @@ GAMMA                = 0.4  # power stretch to brighten mid-range patches
 # ============================================================
 # RAW-WEIGHTS-SPECIFIC FUNCTIONS
 # ============================================================
-def select_heads(
-    layer_attn: np.ndarray,
-    all_img_spans: List[Tuple[int, int]],
-    task_span: Tuple[int, int] | None,
-    state_span: Tuple[int, int] | None,
-    top_k: int,
-) -> np.ndarray:
-    """
-    Rank attention heads by image/(task+state) budget ratio and return the
-    indices of the top_k most image-focused heads.
-    """
-    H = layer_attn.shape[0]
-
-    img_budget = np.zeros(H, dtype=np.float32)
-    for s0, s1 in all_img_spans:
-        img_budget += layer_attn[:, s0:s1].sum(axis=1)
-
-    text_budget = np.zeros(H, dtype=np.float32)
-    if task_span is not None:
-        text_budget += layer_attn[:, task_span[0]:task_span[1]].sum(axis=1)
-    if state_span is not None:
-        text_budget += layer_attn[:, state_span[0]:state_span[1]].sum(axis=1)
-
-    ratio = img_budget / (text_budget + 1e-9)
-    return np.argsort(ratio)[-min(top_k, H):]
-
-
 def select_heads_for_span(
-    layer_attn: np.ndarray,
+    attn: np.ndarray,
     span: Tuple[int, int],
     all_spans: List[Tuple[int, int]],
     top_k: int,
 ) -> np.ndarray:
-    """Return top_k heads ranked by one-vs-rest ratio for the given span.
+    """Return top_k heads for the given span using HEAD_SELECTION_MODE.
 
-    ratio[h] = budget(h, span) / budget(h, all other spans)
-
-    This identifies heads that specifically prefer this span over all others,
-    rather than heads that simply attend a lot in absolute terms.
+    "ratio":  score[h] = attn[h, span].sum() / attn[h, all_other_spans].sum()
+              Ranks by relative preference — which heads attend to this span
+              more than to everything else.
+    "budget": score[h] = attn[h, span].sum()
+              Ranks by absolute attention mass — which heads put the most
+              attention on this span, compared directly across all heads.
     """
     s0, s1 = span
-    target_budget = layer_attn[:, s0:s1].sum(axis=1)   # (H,)
-    other_budget  = np.zeros(layer_attn.shape[0], dtype=np.float32)
-    for sp in all_spans:
-        if sp != span:
-            other_budget += layer_attn[:, sp[0]:sp[1]].sum(axis=1)
-    ratio = target_budget / (other_budget + 1e-9)
-    return np.argsort(ratio)[-min(top_k, layer_attn.shape[0]):]
+    target_budget = attn[:, s0:s1].sum(axis=1)   # (H,)
+    if HEAD_SELECTION_MODE == "ratio":
+        other_budget = np.zeros(attn.shape[0], dtype=np.float32)
+        for sp in all_spans:
+            if sp != span:
+                other_budget += attn[:, sp[0]:sp[1]].sum(axis=1)
+        score = target_budget / (other_budget + 1e-9)
+    else:
+        score = target_budget
+    return np.argsort(score)[-min(top_k, attn.shape[0]):]
 
 
 def log_normalize_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
@@ -160,13 +139,10 @@ def process_one(npy_path: str, out_png: str) -> None:
     if layers_key not in rec:
         raise KeyError(f"Missing {layers_key} in {npy_path}")
     stored_layers = np.asarray(rec[layers_key]).tolist()
-    sel_idx    = stored_layers.index(HEAD_SELECTION_LAYER)
     target_idx = stored_layers.index(TARGET_LAYER)
 
-    # Per-modality head selection: for each modality, pick the top-K heads by
-    # one-vs-rest ratio at HEAD_SELECTION_LAYER, then score at TARGET_LAYER.
-    selector_attn = full_attn[sel_idx,    0, :, :]  # (H, S)
-    attn_tgt      = full_attn[target_idx, 0, :, :]  # (H, S)
+    # Head selection and scoring both use TARGET_LAYER.
+    attn_tgt = full_attn[target_idx, 0, :, :]  # (H, S)
 
     if task_span is None or state_span is None:
         raise KeyError("task/state spans missing from record — cannot build text panel")
@@ -175,9 +151,9 @@ def process_one(npy_path: str, out_png: str) -> None:
     Hp, Wp = IMAGE_PATCH_GRID
     heats, imgs = [], []
     for span, (cam_name, img_key) in zip(cam_spans, zip(CAM_NAMES, CAM_IMAGE_KEYS)):
-        heads      = select_heads_for_span(selector_attn, span, all_spans, TOP_K_HEADS)
+        heads      = select_heads_for_span(attn_tgt, span, all_spans, TOP_K_HEADS)
         cam_scores = attn_tgt[heads, span[0]:span[1]].max(axis=0)   # (N_patches,)
-        print(f"  {cam_name} heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in heads)}")
+        print(f"  {cam_name} heads (layer {TARGET_LAYER}): {sorted(int(h) for h in heads)}")
         if cam_scores.size != Hp * Wp:
             raise ValueError(f"{cam_name}: span length {cam_scores.size} != grid {Hp}x{Wp}={Hp*Wp}")
         heats.append(cam_scores.reshape(Hp, Wp))
@@ -196,12 +172,12 @@ def process_one(npy_path: str, out_png: str) -> None:
 
     grid = make_grid(overlays, originals, bg=BG, gap_x=GAP_X, gap_y=GAP_Y)
 
-    task_heads  = select_heads_for_span(selector_attn, task_span,  all_spans, TOP_K_HEADS)
-    state_heads = select_heads_for_span(selector_attn, state_span, all_spans, TOP_K_HEADS)
+    task_heads  = select_heads_for_span(attn_tgt, task_span,  all_spans, TOP_K_HEADS)
+    state_heads = select_heads_for_span(attn_tgt, state_span, all_spans, TOP_K_HEADS)
     task_token_scores  = attn_tgt[task_heads,  task_span[0]:task_span[1]].max(axis=0)
     state_token_scores = attn_tgt[state_heads, state_span[0]:state_span[1]].max(axis=0)
-    print(f"  task  heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in task_heads)}")
-    print(f"  state heads (layer {HEAD_SELECTION_LAYER}→{TARGET_LAYER}): {sorted(int(h) for h in state_heads)}")
+    print(f"  task  heads (layer {TARGET_LAYER}): {sorted(int(h) for h in task_heads)}")
+    print(f"  state heads (layer {TARGET_LAYER}): {sorted(int(h) for h in state_heads)}")
     text_panel = render_text_panel_from_token_scores(rec, task_token_scores, state_token_scores, grid.height)
 
     combined = Image.new("RGB", (grid.width + GAP_X + text_panel.width, grid.height), BG)

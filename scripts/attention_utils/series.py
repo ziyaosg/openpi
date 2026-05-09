@@ -15,135 +15,110 @@ FULL_ATTN_KEY = "outputs/debug/attn/weights"
 ATTR_RELU_TASK  = False
 ATTR_RELU_STATE = False
 
-# ── Raw-attention head-selection settings (mirrors grid_visualization_raw_weights.py) ──
-# Layer whose attention values are used for the final scores.
+# Layer used for both head selection and scoring.
 RAW_ATTN_TARGET_LAYER = 16
-# Layer used only to rank heads by image-focus (early layers are more stable).
-RAW_ATTN_HEAD_SELECTION_LAYER = 1
-# Number of top image-focused heads to include.
-RAW_ATTN_TOP_K_HEADS = 3
+RAW_ATTN_TOP_K_HEADS  = 3
+# Head selection strategy: "ratio" (one-vs-rest) or "budget" (raw attention mass).
+HEAD_SELECTION_MODE   = "budget"
 
 
-def _select_heads(
-    layer_attn: np.ndarray,
-    all_img_spans: List[Tuple[int, int]],
-    task_span: Tuple[int, int] | None,
-    state_span: Tuple[int, int] | None,
+def _select_heads_for_span(
+    attn: np.ndarray,
+    span: Tuple[int, int],
+    all_spans: List[Tuple[int, int]],
     top_k: int,
 ) -> np.ndarray:
-    """Return indices of the top_k heads with the highest image/(task+state) budget ratio."""
-    H = layer_attn.shape[0]
+    """Return top_k heads for the given span using HEAD_SELECTION_MODE.
 
-    img_budget = np.zeros(H, dtype=np.float32)
-    for s0, s1 in all_img_spans:
-        img_budget += layer_attn[:, s0:s1].sum(axis=1)
-
-    text_budget = np.zeros(H, dtype=np.float32)
-    if task_span is not None:
-        text_budget += layer_attn[:, task_span[0]:task_span[1]].sum(axis=1)
-    if state_span is not None:
-        text_budget += layer_attn[:, state_span[0]:state_span[1]].sum(axis=1)
-
-    ratio = img_budget / (text_budget + 1e-9)
-    return np.argsort(ratio)[-min(top_k, H):]
-
-
-def _extract_raw_attn_row(record: dict) -> np.ndarray:
-    """Two-stage head selection on raw attention weights.
-
-    1. Rank heads at RAW_ATTN_HEAD_SELECTION_LAYER by image/(task+state) budget.
-    2. Take element-wise max across the top-K heads at RAW_ATTN_TARGET_LAYER.
-
-    Returns a (S,) float32 array over all token positions.
+    "ratio":  score[h] = attn[h, span].sum() / attn[h, all_other_spans].sum()
+              Ranks by relative preference — which heads attend to this span
+              more than to everything else.
+    "budget": score[h] = attn[h, span].sum()
+              Ranks by absolute attention mass — which heads put the most
+              attention on this span, compared directly across all heads.
     """
+    s0, s1 = span
+    target_budget = attn[:, s0:s1].sum(axis=1)   # (H,)
+    if HEAD_SELECTION_MODE == "ratio":
+        other_budget = np.zeros(attn.shape[0], dtype=np.float32)
+        for sp in all_spans:
+            if sp != span:
+                other_budget += attn[:, sp[0]:sp[1]].sum(axis=1)
+        score = target_budget / (other_budget + 1e-9)
+    else:
+        score = target_budget
+    return np.argsort(score)[-min(top_k, attn.shape[0]):]
+
+
+def _build_all_spans(record: dict) -> List[Tuple[int, int]]:
+    """Collect all modality spans from a record."""
     from .keys import ATTN_KEYS, CAM_NAMES
-
-    full_attn = np.asarray(record[FULL_ATTN_KEY])  # (L, 1, H, S)
-
-    all_img_spans: List[Tuple[int, int]] = []
+    spans: List[Tuple[int, int]] = []
     for cam_name in CAM_NAMES:
-        span_key = f"outputs/debug/spans/image/{cam_name}"
-        if span_key in record:
-            s = record[span_key]
-            all_img_spans.append((int(s[0]), int(s[1])))
-
-    task_span = state_span = None
+        key = f"outputs/debug/spans/image/{cam_name}"
+        if key in record:
+            s = record[key]
+            spans.append((int(s[0]), int(s[1])))
     if ATTN_KEYS["task"] in record:
         s = record[ATTN_KEYS["task"]]
-        task_span = (int(s[0]), int(s[1]))
+        spans.append((int(s[0]), int(s[1])))
     if ATTN_KEYS["state"] in record:
         s = record[ATTN_KEYS["state"]]
-        state_span = (int(s[0]), int(s[1]))
+        spans.append((int(s[0]), int(s[1])))
+    return spans
 
-    # Map layer numbers to their storage indices using the saved layers array.
-    stored_layers = np.asarray(record["outputs/debug/attn/layers"]).tolist()
-    sel_idx    = stored_layers.index(RAW_ATTN_HEAD_SELECTION_LAYER)
-    target_idx = stored_layers.index(RAW_ATTN_TARGET_LAYER)
 
-    selector_attn = full_attn[sel_idx, 0, :, :]  # (H, S)
-    top_head_idx = _select_heads(selector_attn, all_img_spans, task_span, state_span, RAW_ATTN_TOP_K_HEADS)
+def _extract_raw_attn_row(
+    record: dict,
+    target_span: Tuple[int, int],
+    all_spans: List[Tuple[int, int]],
+) -> np.ndarray:
+    """Per-modality one-vs-rest head selection + max over heads at TARGET_LAYER.
 
-    # Element-wise max across selected heads from the target layer
-    attn_row = full_attn[target_idx, 0, :, :][top_head_idx, :].max(axis=0)  # (S,)
-    return attn_row.astype(np.float32)
+    Returns float32 scores for target_span only.
+    """
+    full_attn  = np.asarray(record[FULL_ATTN_KEY])
+    stored     = np.asarray(record["outputs/debug/attn/layers"]).tolist()
+    attn       = full_attn[stored.index(RAW_ATTN_TARGET_LAYER), 0]   # (H, S)
+    heads      = _select_heads_for_span(attn, target_span, all_spans, RAW_ATTN_TOP_K_HEADS)
+    s0, s1     = target_span
+    return attn[heads, s0:s1].max(axis=0).astype(np.float32)
 
 
 FULL_V_KEY = "outputs/debug/attn/v"
 
 
-def _extract_value_score_row(record: dict, mode: str) -> np.ndarray:
-    """Two-stage head selection on value-weighted scores.
+def _extract_value_score_row(
+    record: dict,
+    mode: str,
+    target_span: Tuple[int, int],
+    all_spans: List[Tuple[int, int]],
+) -> np.ndarray:
+    """Per-modality one-vs-rest head selection + value scoring at TARGET_LAYER.
 
-    mode="v_norm":   score[s] = attn[h,s] * ||v[s,h,:]||, max over top-K heads.
-    mode="v_cosine": score[s] = |cosine(v[s,h,:], o_h)|,  max over top-K heads,
-                     where o_h = sum_s(attn[h,s] * v[s,h,:]).
-
-    Returns a (S,) float32 array over all token positions.
+    Returns float32 scores for target_span only.
     """
-    from .keys import ATTN_KEYS, CAM_NAMES
-
-    full_attn = np.asarray(record[FULL_ATTN_KEY])    # (2, B, H, S)
-    full_v    = np.asarray(record[FULL_V_KEY])        # (2, B, S, H, D)
-
-    stored_layers = np.asarray(record["outputs/debug/attn/layers"]).tolist()
-    sel_idx    = stored_layers.index(RAW_ATTN_HEAD_SELECTION_LAYER)
-    target_idx = stored_layers.index(RAW_ATTN_TARGET_LAYER)
-
-    all_img_spans: list[tuple[int, int]] = []
-    for cam_name in CAM_NAMES:
-        span_key = f"outputs/debug/spans/image/{cam_name}"
-        if span_key in record:
-            s = record[span_key]
-            all_img_spans.append((int(s[0]), int(s[1])))
-
-    task_span = state_span = None
-    if ATTN_KEYS["task"] in record:
-        s = record[ATTN_KEYS["task"]]
-        task_span = (int(s[0]), int(s[1]))
-    if ATTN_KEYS["state"] in record:
-        s = record[ATTN_KEYS["state"]]
-        state_span = (int(s[0]), int(s[1]))
-
-    selector_attn = full_attn[sel_idx, 0, :, :]       # (H, S)
-    top_heads = _select_heads(selector_attn, all_img_spans, task_span, state_span, RAW_ATTN_TOP_K_HEADS)
-
-    attn = full_attn[target_idx, 0, :, :]              # (H, S)
-    v    = full_v[target_idx, 0, :, :, :]              # (S, H, D)
+    full_attn  = np.asarray(record[FULL_ATTN_KEY])
+    full_v     = np.asarray(record[FULL_V_KEY])
+    stored     = np.asarray(record["outputs/debug/attn/layers"]).tolist()
+    tgt        = stored.index(RAW_ATTN_TARGET_LAYER)
+    attn       = full_attn[tgt, 0]       # (H, S)
+    v          = full_v[tgt, 0]          # (S, H, D)
+    heads      = _select_heads_for_span(attn, target_span, all_spans, RAW_ATTN_TOP_K_HEADS)
+    s0, s1     = target_span
 
     if mode == "v_norm":
         v_norms  = np.linalg.norm(v, axis=-1)          # (S, H)
         weighted = attn * v_norms.T                    # (H, S)
-        row = weighted[top_heads, :].max(axis=0)
+        return weighted[heads, s0:s1].max(axis=0).astype(np.float32)
     elif mode == "v_cosine":
-        o      = np.einsum("hs,shd->hd", attn, v)                              # (H, D)
-        o_unit = o / (np.linalg.norm(o, axis=-1, keepdims=True) + 1e-9)        # (H, D)
-        v_unit = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)        # (S, H, D)
-        cos    = np.einsum("shd,hd->sh", v_unit, o_unit)                       # (S, H)
-        row    = np.abs(cos)[:, top_heads].max(axis=1)
+        o      = np.einsum("hs,shd->hd", attn, v)
+        o_unit = o / (np.linalg.norm(o, axis=-1, keepdims=True) + 1e-9)
+        v_unit = v / (np.linalg.norm(v, axis=-1, keepdims=True) + 1e-9)
+        cos    = np.einsum("shd,hd->sh", v_unit, o_unit)          # (S, H)
+        return cos[s0:s1, :][:, heads].max(axis=1).astype(np.float32)
     else:
         raise ValueError(f"Unknown mode {mode!r}. Choose 'v_norm' or 'v_cosine'.")
-
-    return row.astype(np.float32)
 
 
 def extract_patches(
@@ -172,15 +147,14 @@ def extract_patches(
         return vals
     if data_source in ("raw_alpha", "raw_alpha_norm"):
         return np.asarray(record[key][0], dtype=np.float32).reshape(-1)
+    span_raw     = record[key]
+    target_span  = (int(span_raw[0]), int(span_raw[1]))
+    all_spans    = _build_all_spans(record)
     if data_source in ("v_norm", "v_cosine"):
-        score_row = _extract_value_score_row(record, mode=data_source)
-        span = record[key]
-        return score_row[int(span[0]):int(span[1])]
+        return _extract_value_score_row(record, mode=data_source,
+                                        target_span=target_span, all_spans=all_spans)
     # default: raw attention weights
-    attn_row = _extract_raw_attn_row(record)
-    span = record[key]
-    start, end = int(span[0]), int(span[1])
-    return attn_row[start:end]
+    return _extract_raw_attn_row(record, target_span=target_span, all_spans=all_spans)
 
 
 

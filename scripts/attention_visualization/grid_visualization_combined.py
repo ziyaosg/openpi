@@ -40,10 +40,9 @@ from ..attention_utils.keys import CAM_NAMES, CAM_IMAGE_KEYS, IMAGE_PATCH_GRID
 from .grid_visualization_gradcam import to_2d_heatmap, normalize_joint
 from .grid_visualization_raw_alpha import clip_normalize_joint, CLIP_PERCENTILE, GAMMA
 from .grid_visualization_raw_weights import (
-    select_heads,
+    select_heads_for_span,
     log_normalize_joint,
     TARGET_LAYER,
-    HEAD_SELECTION_LAYER,
     TOP_K_HEADS,
 )
 from .grid_visualization_value_attn import score_v_cosine
@@ -132,9 +131,9 @@ def _text_spans(rec: dict) -> Tuple[Tuple[int, int] | None, Tuple[int, int] | No
     return task, state
 
 
-def _layer_indices(rec: dict) -> Tuple[int, int]:
+def _layer_indices(rec: dict) -> int:
     stored = np.asarray(rec[LAYERS_KEY]).tolist()
-    return stored.index(HEAD_SELECTION_LAYER), stored.index(TARGET_LAYER)
+    return stored.index(TARGET_LAYER)
 
 
 # ============================================================
@@ -189,33 +188,39 @@ def process_one(npy_path: str, out_png: str) -> None:
     state_col_w = len(state_labels) * STATE_TILE_W
 
     # ── Shared attention precomputation ──────────────────────────────────────
-    cam_spans         = _cam_spans(rec)
-    task_sp, state_sp = _text_spans(rec)
-    sel_idx, tgt_idx  = _layer_indices(rec)
+    cam_spans          = _cam_spans(rec)
+    task_sp, state_sp  = _text_spans(rec)
+    tgt_idx            = _layer_indices(rec)
     full_attn = np.asarray(rec[FULL_ATTN_KEY])   # (L, B, H, S)
     full_v    = np.asarray(rec[FULL_V_KEY])       # (L, B, S, K, D)  K=1 for GQA
-    top_heads = select_heads(full_attn[sel_idx, 0], cam_spans, task_sp, state_sp, TOP_K_HEADS)
     attn      = full_attn[tgt_idx, 0]             # (H, S)
-    v         = full_v[tgt_idx, 0]               # (S, K, D)
+    v         = full_v[tgt_idx, 0]                # (S, K, D)
 
-    raw_w_full      = attn[top_heads].max(axis=0)            # (S,)
-    vcosine_full    = score_v_cosine(attn, v, top_heads)     # (S,)
+    # Per-modality one-vs-rest head selection at TARGET_LAYER.
+    all_spans: List[Tuple[int, int]] = list(cam_spans)
+    if task_sp:  all_spans.append(task_sp)
+    if state_sp: all_spans.append(state_sp)
 
-    def _patch(s: np.ndarray) -> List[np.ndarray]:
-        return [s[s0:s1].reshape(Hp, Wp) for s0, s1 in cam_spans]
+    cam_heads   = [select_heads_for_span(attn, sp, all_spans, TOP_K_HEADS) for sp in cam_spans]
+    task_heads  = select_heads_for_span(attn, task_sp,  all_spans, TOP_K_HEADS) if task_sp  else None
+    state_heads = select_heads_for_span(attn, state_sp, all_spans, TOP_K_HEADS) if state_sp else None
 
-    def _task_slice(s: np.ndarray) -> np.ndarray:
-        return s[task_sp[0]:task_sp[1]].astype(np.float32) if task_sp else np.zeros(0, np.float32)
+    # Raw-weights and v-cosine scores per modality.
+    rw_cams   = [attn[h, s0:s1].max(axis=0).reshape(Hp, Wp) for h, (s0, s1) in zip(cam_heads, cam_spans)]
+    vcos_cams = [score_v_cosine(attn, v, h)[s0:s1].reshape(Hp, Wp) for h, (s0, s1) in zip(cam_heads, cam_spans)]
 
-    def _state_slice(s: np.ndarray) -> np.ndarray:
-        return s[state_sp[0]:state_sp[1]].astype(np.float32) if state_sp else np.zeros(0, np.float32)
+    _z = np.zeros(0, np.float32)
+    rw_task   = attn[task_heads,  task_sp[0]:task_sp[1]].max(axis=0)   if task_sp  and task_heads  is not None else _z
+    rw_state  = attn[state_heads, state_sp[0]:state_sp[1]].max(axis=0) if state_sp and state_heads is not None else _z
+    vcos_task  = score_v_cosine(attn, v, task_heads)[task_sp[0]:task_sp[1]]   if task_sp  and task_heads  is not None else _z
+    vcos_state = score_v_cosine(attn, v, state_heads)[state_sp[0]:state_sp[1]] if state_sp and state_heads is not None else _z
 
     # ── Per-method image heatmaps ─────────────────────────────────────────────
     image_heats: List[List[np.ndarray]] = [
         _heatmaps_gradcam(rec),
         _heatmaps_raw_alpha(rec),
-        log_normalize_joint(_patch(raw_w_full)),
-        normalize_joint(_patch(vcosine_full)),
+        log_normalize_joint(rw_cams),
+        normalize_joint(vcos_cams),
     ]
 
     # ── Per-method token scores (content tokens only, indexed by task/state_idx) ─
@@ -223,16 +228,16 @@ def process_one(npy_path: str, out_png: str) -> None:
         ts[task_idx] for ts in [
             rec["outputs/debug/gradcam/task"][0].astype(np.float32),
             rec["outputs/debug/raw_alpha/summation/task"][0].astype(np.float32),
-            _task_slice(raw_w_full),
-            _task_slice(vcosine_full),
+            rw_task,
+            vcos_task,
         ]
     ]
     state_scores_per_method: List[np.ndarray] = [
         ss[state_idx] for ss in [
             rec["outputs/debug/gradcam/state"][0].astype(np.float32),
             rec["outputs/debug/raw_alpha/summation/state"][0].astype(np.float32),
-            _state_slice(raw_w_full),
-            _state_slice(vcosine_full),
+            rw_state,
+            vcos_state,
         ]
     ]
 

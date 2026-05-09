@@ -34,7 +34,7 @@ import numpy as np
 from scipy.stats import wasserstein_distance
 
 from scripts.attention_visualization.grid_visualization_raw_weights import (
-    select_heads, select_heads_for_span, TARGET_LAYER, HEAD_SELECTION_LAYER, TOP_K_HEADS,
+    select_heads_for_span, TARGET_LAYER, TOP_K_HEADS,
 )
 from scripts.attention_visualization.grid_visualization_value_attn import score_v_cosine
 from scripts.attention_visualization.grid_visualization_gradcam import to_2d_heatmap
@@ -203,9 +203,9 @@ def _tok_agreement(scores: list) -> dict:
     return result
 
 
-def _layer_indices(rec: dict) -> Tuple[int, int]:
+def _layer_indices(rec: dict) -> int:
     stored = np.asarray(rec[LAYERS_KEY]).tolist()
-    return stored.index(HEAD_SELECTION_LAYER), stored.index(TARGET_LAYER)
+    return stored.index(TARGET_LAYER)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,20 +224,19 @@ def extract(rec: dict) -> dict:
     sp_task   = _span(rec, "outputs/debug/spans/task")
     sp_state  = _span(rec, "outputs/debug/spans/state")
 
-    sel_idx, tgt_idx = _layer_indices(rec)
-    attn_sel = full_attn[sel_idx, 0]  # (H, S)  head-selection layer
-    attn_tgt = full_attn[tgt_idx, 0]  # (H, S)  target layer
+    tgt_idx  = _layer_indices(rec)
+    attn_tgt = full_attn[tgt_idx, 0]  # (H, S)
     v_tgt    = full_v[tgt_idx, 0]     # (S, K, D)
 
-    # ── Per-modality one-vs-rest head selection ───────────────────────────────
+    # ── Per-modality one-vs-rest head selection at TARGET_LAYER ───────────────
     all_spans: List[Tuple[int, int]] = [sp_base] + sp_wrists
     if sp_task:  all_spans.append(sp_task)
     if sp_state: all_spans.append(sp_state)
 
-    base_heads  = select_heads_for_span(attn_sel, sp_base,       all_spans, TOP_K_HEADS)
-    task_heads  = select_heads_for_span(attn_sel, sp_task,       all_spans, TOP_K_HEADS) if sp_task  else None
-    state_heads = select_heads_for_span(attn_sel, sp_state,      all_spans, TOP_K_HEADS) if sp_state else None
-    wrist_heads = select_heads_for_span(attn_sel, sp_wrists[0],  all_spans, TOP_K_HEADS) if sp_wrists else None
+    base_heads  = select_heads_for_span(attn_tgt, sp_base,       all_spans, TOP_K_HEADS)
+    task_heads  = select_heads_for_span(attn_tgt, sp_task,       all_spans, TOP_K_HEADS) if sp_task  else None
+    state_heads = select_heads_for_span(attn_tgt, sp_state,      all_spans, TOP_K_HEADS) if sp_state else None
+    wrist_heads = select_heads_for_span(attn_tgt, sp_wrists[0],  all_spans, TOP_K_HEADS) if sp_wrists else None
 
     # ── Attention concentration (base cam, mean over all heads) ───────────────
     base_attn = attn_tgt[:, sp_base[0]:sp_base[1]].mean(axis=0)  # (N_patches,)
