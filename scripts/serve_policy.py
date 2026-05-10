@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import logging
 import socket
+from datetime import datetime
 
 import tyro
 
@@ -102,7 +103,8 @@ def main(args: Args) -> None:
 
     # Record the policy's behavior.
     if args.record:
-        policy = _policy.PolicyRecorder(policy, "policy_records")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        policy = _policy.PolicyRecorder(policy, f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{timestamp}")
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
