@@ -97,4 +97,6 @@ class LiberoOutputs(transforms.DataTransformFn):
         # dimension, we need to now parse out the correct number of actions in the return dict.
         # For Libero, we only return the first 7 actions (since the rest is padding).
         # For your own dataset, replace `7` with the action dimension of your dataset.
-        return {"actions": np.asarray(data["actions"][:, :7])}
+        out = {k: v for k, v in data.items() if k != "actions"}
+        out["actions"] = np.asarray(data["actions"][:, :7])
+        return out
