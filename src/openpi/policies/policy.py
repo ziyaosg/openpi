@@ -107,6 +107,8 @@ class Policy(BasePolicy):
         def _unbatch(x):
             # Spans (Python ints) become 0-d JAX scalars after jit; pass them through unchanged.
             a = np.asarray(x.detach().cpu() if self._is_pytorch_model else x)
+            if a.dtype.name == "bfloat16":
+                a = a.astype(np.float32)
             return a[0] if a.ndim > 0 else a
 
         outputs = jax.tree.map(_unbatch, outputs)
