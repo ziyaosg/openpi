@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..attention_utils.io import load_episode_infos, load_episode_records
-from ..attention_utils.keys import get_modality_keys
+from ..attention_utils.keys import get_modality_keys, CAM_NAMES
 from ..attention_utils.names import (
     attention_plot_filename,
     norm_code,
@@ -18,87 +18,98 @@ from ..attention_utils.series import FULL_ATTN_KEY, extract_patches, normalize_m
 # ============================================================
 # PATHS
 # ============================================================
-INPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916"
-OUTPUT_DIR = "/home/ziyao/Documents/policy_records_20260407_155916/analysis_gradcam_avg_&_zscore"
-EPISODE_SUMMARIES_JSON = "/home/ziyao/Documents/policy_records_20260407_155916/episode_summaries.json"
+INPUT_DIR = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003"
+EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003/episode_summaries.json"
+
+# ============================================================
+# ACTION TOKEN
+# Change this to analyse a different token (0–4).
+# All output folders and filenames update automatically.
+# ============================================================
+ACTION_TOKEN_IDX = 2
+
+# Derived — updates automatically with ACTION_TOKEN_IDX
+OUTPUT_DIR = (
+    "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003"
+    f"/analysis_gradcam_avg_&_zscore_t{ACTION_TOKEN_IDX}"
+)
 
 # ============================================================
 # DATA SOURCE
-# "gradcam" -- use GradCAM attribution maps (outputs/debug/gradcam/...)
-# "attn"    -- use raw attention weights    (outputs/debug/attn/...)
 # ============================================================
 DATA_SOURCE = "gradcam"
 
 # ============================================================
-# REDUCTION METHOD
-# How to collapse the 2D heatmap (or 1D score array for task/state)
-# down to a single scalar per step.
-# Options: "average", "median", "max", "min", "sum", "sqrt_norm_sum"
+# REDUCTION / NORMALIZATION
 # ============================================================
 REDUCTION_METHOD_IMAGE = "average"
 REDUCTION_METHOD_TASK  = "average"
 REDUCTION_METHOD_STATE = "average"
-
-# ============================================================
-# NORMALIZATION METHOD
-# How to normalize the per-step scalar series within each episode
-# so modalities are on a comparable scale.
-# Options: "zscore"         -- center on mean, scale by std
-#          "robust_zscore"  -- center on median, scale by MAD
-#          "minmax"         -- scale to [0, 1]
-#          "none"           -- no normalization, raw values
-# ============================================================
 NORM_METHOD = "zscore"
 
-# Derived from the variables above — do not edit directly.
+# Derived — do not edit directly.
 _MODALITY_KEYS = list(get_modality_keys(DATA_SOURCE).values())
 _REDUCTIONS = [REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_IMAGE, REDUCTION_METHOD_TASK, REDUCTION_METHOD_STATE]
 REDUCTION_PER_KEY = dict(zip(_MODALITY_KEYS, _REDUCTIONS))
 
 
+# ============================================================
+# TOKEN-AWARE PATCH EXTRACTION
+# ============================================================
+
+def extract_patches_for_token(record: dict, base_key: str, t: int):
+    """Redirect base_key lookup to the per-token subtree, then call extract_patches."""
+    branch = DATA_SOURCE
+    token_key = f"outputs/debug/{branch}/action_tokens/{t}/{base_key.split('/')[-1]}"
+    proxy = {base_key: record[token_key]} if token_key in record else {}
+    if not proxy:
+        raise KeyError(f"Token key not found in record: {token_key}")
+    return extract_patches(proxy, base_key, DATA_SOURCE, FULL_ATTN_KEY)
+
+
+# ============================================================
+# SERIES BUILDERS
+# ============================================================
 
 def build_batch_series(records) -> dict:
-    """Build normalized scalar series for all modalities from pre-loaded records."""
+    """Build normalized scalar series for all modalities using ACTION_TOKEN_IDX."""
     series = {k: ([], []) for k in REDUCTION_PER_KEY}
 
-    for t, record in records:
+    for step, record in records:
         for k, method in REDUCTION_PER_KEY.items():
             try:
-                val = reduce_vals(extract_patches(record, k, DATA_SOURCE, FULL_ATTN_KEY), method)
+                val = reduce_vals(
+                    extract_patches_for_token(record, k, ACTION_TOKEN_IDX), method
+                )
             except Exception as e:
                 print(f"[WARN] key {k}: {e}")
                 continue
-            series[k][0].append(t)
+            series[k][0].append(step)
             series[k][1].append(val)
 
-    all_series = {}
-    for k, (steps, values) in series.items():
-        all_series[k] = (steps, normalize_modality(values, NORM_METHOD))
-    return all_series
+    return {
+        k: (steps, normalize_modality(values, NORM_METHOD))
+        for k, (steps, values) in series.items()
+    }
 
 
 def build_raw_patch_series(records) -> dict:
-    """Build raw patch arrays for all modalities from pre-loaded records."""
-    keys = list(REDUCTION_PER_KEY)
-    raw = {k: [] for k in keys}
+    """Build raw patch arrays for all modalities using ACTION_TOKEN_IDX."""
+    raw = {k: [] for k in REDUCTION_PER_KEY}
 
-    for t, record in records:
-        for k in keys:
+    for step, record in records:
+        for k in REDUCTION_PER_KEY:
             try:
-                patches = extract_patches(record, k, DATA_SOURCE, FULL_ATTN_KEY)
+                patches = extract_patches_for_token(record, k, ACTION_TOKEN_IDX)
             except Exception as e:
                 print(f"[WARN] key {k}: {e}")
                 continue
-            raw[k].append((t, patches))
+            raw[k].append((step, patches))
+
     return raw
 
 
 def build_variance_series(raw_series: dict) -> dict:
-    """Per-step patch variance derived from a pre-built raw_series.
-
-    For each modality key, computes np.var across patch/token values at each
-    step, giving {key: (ts, variances)}.
-    """
     return {
         key: (
             [t for t, _ in steps_patches],
@@ -108,12 +119,25 @@ def build_variance_series(raw_series: dict) -> dict:
     }
 
 
+# ============================================================
+# PLOTTING
+# ============================================================
+
+def _ylabel():
+    base = {
+        "zscore":        "z-score",
+        "robust_zscore": "robust z-score",
+        "minmax":        "min-max [0,1]",
+        "none":          "raw attention",
+    }.get(NORM_METHOD, NORM_METHOD)
+    return f"Attention ({base})"
+
+
 def plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps: int):
     modality_keys = list(REDUCTION_PER_KEY.keys())
     n_mod = len(modality_keys)
 
     fig_width = max(12, max_steps * 0.12)
-
     height_ratios = [2.3] + [1.0] * n_mod
     fig, axes = plt.subplots(
         1 + n_mod, 1,
@@ -122,9 +146,8 @@ def plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps: int
         sharex=True,
     )
     ax_main = axes[0]
-    ax_vars = axes[1:]
+    ax_vars  = axes[1:]
 
-    # ── Zscore line plot ──────────────────────────────────────────────────
     colors = {}
     for k, (s, v) in all_series.items():
         if s:
@@ -132,10 +155,10 @@ def plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps: int
             colors[k] = line.get_color()
     ax_main.set_ylabel(_ylabel())
     ax_main.set_xlim(-0.5, max_steps - 0.5)
+    ax_main.set_title(f"Action Token t{ACTION_TOKEN_IDX}")
     ax_main.legend()
     ax_main.tick_params(labelbottom=False)
 
-    # ── Per-modality variance bars ────────────────────────────────────────
     for ax, k in zip(ax_vars, modality_keys):
         ts, variances = var_series[k]
         if ts:
@@ -154,19 +177,20 @@ def plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps: int
     grouped_dir.mkdir(parents=True, exist_ok=True)
 
     norm_str = norm_code(NORM_METHOD)
-    filename = attention_plot_filename(ep, norm_str, reduction_code(REDUCTION_PER_KEY))
+    base_filename = attention_plot_filename(ep, norm_str, reduction_code(REDUCTION_PER_KEY))
+    stem, suffix = base_filename.rsplit(".", 1)
+    filename = f"{stem}_t{ACTION_TOKEN_IDX}.{suffix}"
+
     plt.savefig(grouped_dir / filename, dpi=150, bbox_inches="tight")
     print(f"Saved zscore+variance plot: {grouped_dir / filename}")
     plt.close()
 
 
-def calculate_changes_in_slope(
-    *,
-    all_series,
-    short_label,
-    n_steps: int,
-    eps: float = 1e-8,
-):
+# ============================================================
+# SLOPE-CHANGE ANALYSIS
+# ============================================================
+
+def calculate_changes_in_slope(*, all_series, short_label, n_steps: int, eps: float = 1e-8):
     results = {}
 
     for modality_key, (_, values) in all_series.items():
@@ -176,41 +200,21 @@ def calculate_changes_in_slope(
             results[short_label(modality_key)] = 0
             continue
 
-        cutoff = min(n_steps, len(arr))
-        arr = arr[:cutoff]
-
+        arr    = arr[: min(n_steps, len(arr))]
         slopes = np.diff(arr)
-
-        # Vectorized sign computation: ignore near-zero slopes (treat as flat)
-        raw_signs = np.sign(slopes)
-        signs = raw_signs[np.abs(slopes) > eps]
+        signs  = np.sign(slopes)
+        signs  = signs[np.abs(slopes) > eps]
 
         if len(signs) < 2:
             results[short_label(modality_key)] = 0
             continue
 
-        num_changes = int(np.sum(np.diff(signs) != 0))
-        results[short_label(modality_key)] = num_changes
+        results[short_label(modality_key)] = int(np.sum(np.diff(signs) != 0))
 
     return results
 
 
-def _ylabel():
-    base = {
-        "zscore": "z-score",
-        "robust_zscore": "robust z-score",
-        "minmax": "min-max [0,1]",
-        "none": "raw attention",
-    }.get(NORM_METHOD, NORM_METHOD)
-    return f"Attention ({base})"
-
-
-
-def plot_slope_change_scatter(
-    *,
-    results_per_episode,
-    output_dir,
-):
+def plot_slope_change_scatter(*, results_per_episode, output_dir):
     xs, ys, colors = [], [], []
 
     for i, (ep, slope_dict) in enumerate(results_per_episode):
@@ -226,23 +230,18 @@ def plot_slope_change_scatter(
     plt.scatter(xs, ys, c=colors)
     plt.xlabel("Episode Index")
     plt.ylabel("Total Slope Sign Changes")
-    plt.title("Slope Sign Changes per Episode (Green=Success, Red=Failure)")
+    plt.title(f"Slope Sign Changes per Episode — t{ACTION_TOKEN_IDX} (Green=Success, Red=Failure)")
     plt.tight_layout()
 
     out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "slope_change_scatter.png"
+    out_path = out_dir / f"slope_change_scatter_t{ACTION_TOKEN_IDX}.png"
     plt.savefig(out_path, dpi=150)
     plt.close()
     print(f"Saved slope change scatter: {out_path}")
 
 
-def plot_slope_change_per_modality(
-    *,
-    results_per_episode,
-    output_dir,
-    n_steps: int,
-):
+def plot_slope_change_per_modality(*, results_per_episode, output_dir, n_steps: int):
     if not results_per_episode:
         print("No data to plot")
         return
@@ -250,7 +249,6 @@ def plot_slope_change_per_modality(
     modalities = list(results_per_episode[0][1].keys())
     n = len(modalities)
     fig, axes = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=True)
-
     if n == 1:
         axes = [axes]
 
@@ -266,23 +264,25 @@ def plot_slope_change_per_modality(
         axes[idx].set_ylabel("Sign changes")
 
     axes[-1].set_xlabel("Episode Index")
-
-    fig.suptitle(f"Slope Sign Changes per Modality (First {n_steps} Steps)", y=1.02)
+    fig.suptitle(
+        f"Slope Sign Changes per Modality — t{ACTION_TOKEN_IDX} (First {n_steps} Steps)", y=1.02
+    )
     plt.tight_layout()
 
     out_dir = Path(output_dir) / "slope_sign_changes"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"slope_changes_per_modality_{n_steps}steps.png"
+    out_path = out_dir / f"slope_changes_per_modality_{n_steps}steps_t{ACTION_TOKEN_IDX}.png"
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Saved per-modality slope scatter: {out_path}")
 
 
-
-
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
-    episodes = load_episode_infos(EPISODE_SUMMARIES_JSON)
+    episodes  = load_episode_infos(EPISODE_SUMMARIES_JSON)
     max_steps = max(ep.end_idx - ep.start_idx + 1 for ep in episodes)
     print(f"Max episode length: {max_steps} steps")
 
@@ -290,22 +290,21 @@ def main():
 
     for ep in episodes:
         print(f"Processing Episode {ep.episode_num} | success={ep.success}")
-        records = load_episode_records(ep, INPUT_DIR)
+        records    = load_episode_records(ep, INPUT_DIR)
         all_series = build_batch_series(records)
-        raw = build_raw_patch_series(records)
+        raw        = build_raw_patch_series(records)
         var_series = build_variance_series(raw)
 
         all_series_per_episode.append((ep, all_series))
-
         plot_episode_zscore_with_variance(ep, all_series, var_series, max_steps)
 
     print("Done plotting individual episodes.")
 
-    # 1–10 individual, then 20, 30, ... up to max_steps
     step_counts = list(range(1, 11)) + list(range(20, max_steps + 1, 10))
     if step_counts[-1] != max_steps:
         step_counts.append(max_steps)
 
+    results_per_episode = None
     for n_steps in step_counts:
         results_per_episode = [
             (ep, calculate_changes_in_slope(
@@ -322,11 +321,12 @@ def main():
             n_steps=n_steps,
         )
 
-    plot_slope_change_scatter(
-        results_per_episode=results_per_episode,
-        output_dir=OUTPUT_DIR,
-    )
+    if results_per_episode:
+        plot_slope_change_scatter(
+            results_per_episode=results_per_episode,
+            output_dir=OUTPUT_DIR,
+        )
+
 
 if __name__ == "__main__":
     main()
-    

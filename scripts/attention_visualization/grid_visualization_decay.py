@@ -29,8 +29,8 @@ from .grid_visualization_gradcam import to_2d_heatmap
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR  = "/home/annsong/Documents/policy_records/policy_records_20260426_100003"
-OUTPUT_DIR = "/home/annsong/Documents/policy_records/policy_records_20260426_100003/decay_overlay"
+INPUT_DIR  = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003"
+OUTPUT_DIR = "/nfs/roberts/scratch/pi_tkf6/as4643/policy_records/policy_records_20260426_100003/decay_overlay"
 EPISODE_JSON = f"{INPUT_DIR}/episode_summaries.json"
 
 IMG_SIZE = 420
