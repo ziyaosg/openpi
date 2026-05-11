@@ -56,7 +56,7 @@ def eval_libero(args: Args) -> None:
     num_tasks_in_suite = task_suite.n_tasks
     logging.info(f"Task suite: {args.task_suite_name}")
 
-    pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)  # fallback default; may be overridden below
 
     if args.task_suite_name == "libero_spatial":
         max_steps = 220  # longest training demo has 193 steps
@@ -72,6 +72,15 @@ def eval_libero(args: Args) -> None:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}")
 
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+
+    # If the server is recording, co-locate videos and summaries under the same record dir.
+    server_metadata = client.get_server_metadata()
+    if "record_dir" in server_metadata:
+        video_out_path = pathlib.Path(server_metadata["record_dir"]) / "client_output"
+        logging.info(f"Server is recording; saving eval outputs to: {video_out_path}")
+    else:
+        video_out_path = pathlib.Path(args.video_out_path)
+    video_out_path.mkdir(parents=True, exist_ok=True)
 
     # episode summary bookkeeping
     episode_summaries = []
@@ -188,7 +197,7 @@ def eval_libero(args: Args) -> None:
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
             imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
+                video_out_path / f"rollout_{task_segment}_{suffix}.mp4",
                 [np.asarray(x) for x in replay_images],
                 fps=10,
             )
@@ -204,7 +213,7 @@ def eval_libero(args: Args) -> None:
 
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
-    out_path = pathlib.Path(args.video_out_path) / "episode_summaries.json"
+    out_path = video_out_path / "episode_summaries.json"
     with open(out_path, "w") as f:
         json.dump(episode_summaries, f, indent=2)
     logging.info(f"Saved episode summaries to: {out_path}")
