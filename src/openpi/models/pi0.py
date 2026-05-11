@@ -456,17 +456,20 @@ class Pi0(_model.BaseModel):
         G = attn_weights.shape[3]
         # Flatten (K, G) → H = K*G = 8 heads to match the analysis scripts' expected format.
         attn_weights = attn_weights.reshape(len(_ATTN_LAYERS), batch_size, K * G, suf_len, prefix_len)
+        # Transpose to (B, L, H, T_suf, T_pfx) so batch is dim 0 for uniform unbatching.
+        attn_weights = attn_weights.transpose(1, 0, 2, 3, 4)  # [B, 2, H=8, T_action, T_prefix]
 
         # V vectors from the prefix KV cache filled during the NORMAL inference pass.
         # kv_cache[1] = v_cache shape [depth, B, T_prefix, K, H_dim].
         # These are the value vectors the action tokens weighted during attention,
         # used downstream for value-weighted attention (v_cosine) analysis.
         v_trimmed = kv_cache[1][_ATTN_LAYERS, :, :prefix_len, :, :]  # [2, B, T_pfx, K, H_dim]
+        v_trimmed = v_trimmed.transpose(1, 0, 2, 3, 4)              # [B, 2, T_prefix, K=1, H_dim=256]
 
+        # "layers" is not included here — it is the compile-time constant _ATTN_LAYERS = [1, 16].
         debug["attn"] = {
-            "weights": attn_weights,   # [2, B, H=8, T_action, T_prefix]
-            "v":       v_trimmed,      # [2, B, T_prefix, K=1, H_dim=256]
-            "layers":  jnp.array(_ATTN_LAYERS),
+            "weights": attn_weights,   # [B, 2, H=8, T_action, T_prefix]
+            "v":       v_trimmed,      # [B, 2, T_prefix, K=1, H_dim=256]
         }
 
         return debug

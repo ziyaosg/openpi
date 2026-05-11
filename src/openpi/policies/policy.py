@@ -103,10 +103,13 @@ class Policy(BasePolicy):
             outputs["debug"] = aux
 
         model_time = time.monotonic() - start_time
-        if self._is_pytorch_model:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
-        else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+
+        def _unbatch(x):
+            # Spans (Python ints) become 0-d JAX scalars after jit; pass them through unchanged.
+            a = np.asarray(x.detach().cpu() if self._is_pytorch_model else x)
+            return a[0] if a.ndim > 0 else a
+
+        outputs = jax.tree.map(_unbatch, outputs)
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
