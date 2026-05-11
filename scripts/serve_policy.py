@@ -106,7 +106,6 @@ def main(args: Args) -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{timestamp}"
         policy = _policy.PolicyRecorder(policy, record_dir)
-        policy_metadata = {**policy_metadata, "record_dir": record_dir}
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)

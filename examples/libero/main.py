@@ -71,13 +71,7 @@ def eval_libero(args: Args) -> None:
 
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
 
-    # If the server is recording, co-locate videos and summaries under the same record dir.
-    server_metadata = client.get_server_metadata()
-    if "record_dir" in server_metadata:
-        video_out_path = pathlib.Path(server_metadata["record_dir"]) / "client_output"
-        logging.info(f"Server is recording; saving eval outputs to: {video_out_path}")
-    else:
-        video_out_path = pathlib.Path(args.video_out_path)
+    video_out_path = pathlib.Path(args.video_out_path)
     video_out_path.mkdir(parents=True, exist_ok=True)
 
     # episode summary bookkeeping
