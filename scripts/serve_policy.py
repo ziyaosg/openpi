@@ -104,7 +104,12 @@ def main(args: Args) -> None:
     # Record the policy's behavior.
     if args.record:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{timestamp}"
+        match args.policy:
+            case Checkpoint():
+                policy_tag = args.policy.config
+            case Default():
+                policy_tag = args.env.value
+        record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{policy_tag}_{timestamp}"
         policy = _policy.PolicyRecorder(policy, record_dir)
 
     hostname = socket.gethostname()
