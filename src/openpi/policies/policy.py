@@ -64,11 +64,20 @@ class Policy(BasePolicy):
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
             self._rng = rng or jax.random.key(0)
 
+    _PIECE_KEYS = ("task_piece_id", "task_piece_begin", "task_piece_end",
+                   "state_piece_id", "state_piece_begin", "state_piece_end")
+
     @override
     def infer(self, obs: dict, *, noise: np.ndarray | None = None) -> dict:  # type: ignore[misc]
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
+
+        # Piece arrays (character-offset spans for visualization) are numpy arrays
+        # produced by the tokenizer transform. They cannot be JAX pytree static fields,
+        # so pop them before batching and reattach to the debug output after inference.
+        pieces = {k: inputs.pop(k) for k in self._PIECE_KEYS if k in inputs}
+
         if not self._is_pytorch_model:
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -101,6 +110,20 @@ class Policy(BasePolicy):
         }
         if aux is not None:
             outputs["debug"] = aux
+
+        # Reattach piece arrays into the debug token dict so they are saved by PolicyRecorder.
+        if pieces and "debug" in outputs:
+            tok = outputs["debug"].setdefault("tokens", {})
+            tok.setdefault("task", {}).update({
+                "piece_id":    pieces["task_piece_id"],
+                "piece_begin": pieces["task_piece_begin"],
+                "piece_end":   pieces["task_piece_end"],
+            })
+            tok["state"] = {
+                "piece_id":    pieces["state_piece_id"],
+                "piece_begin": pieces["state_piece_begin"],
+                "piece_end":   pieces["state_piece_end"],
+            }
 
         model_time = time.monotonic() - start_time
 

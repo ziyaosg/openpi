@@ -447,15 +447,6 @@ class Pi0(_model.BaseModel):
                     "token_ids":  observation.tokenized_prompt,
                     "token_mask": clipped_mask,
                 }
-                if observation.task_piece_id is not None:
-                    debug["tokens"]["task"]["piece_id"]    = observation.task_piece_id
-                    debug["tokens"]["task"]["piece_begin"] = observation.task_piece_begin
-                    debug["tokens"]["task"]["piece_end"]   = observation.task_piece_end
-                    debug["tokens"]["state"] = {
-                        "piece_id":    observation.state_piece_id,
-                        "piece_begin": observation.state_piece_begin,
-                        "piece_end":   observation.state_piece_end,
-                    }
             else:
                 debug["tokens"]["task"] = {
                     "token_ids":  observation.tokenized_prompt,
