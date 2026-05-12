@@ -109,8 +109,9 @@ class Observation(Generic[ArrayT]):
     # pi0.5 debug recording fields (optional).
     # When the tokenized_prompt contains concatenated task+state tokens (discrete_state_input=True),
     # these lengths allow splitting them for per-modality attribution.
-    task_token_len: int | None = None
-    state_token_len: int | None = None
+    # pytree_node=False keeps them as plain Python ints (static) so JAX jit doesn't trace them.
+    task_token_len: int | None = struct.field(pytree_node=False, default=None)
+    state_token_len: int | None = struct.field(pytree_node=False, default=None)
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
