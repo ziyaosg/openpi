@@ -111,7 +111,19 @@ class Policy(BasePolicy):
         if aux is not None:
             outputs["debug"] = aux
 
-        # Reattach piece arrays into the debug token dict so they are saved by PolicyRecorder.
+        model_time = time.monotonic() - start_time
+
+        def _unbatch(x):
+            # Spans (Python ints) become 0-d JAX scalars after jit; pass them through unchanged.
+            a = np.asarray(x.detach().cpu() if self._is_pytorch_model else x)
+            if a.dtype.name == "bfloat16":
+                a = a.astype(np.float32)
+            return a[0] if a.ndim > 0 else a
+
+        outputs = jax.tree.map(_unbatch, outputs)
+
+        # Reattach piece arrays AFTER unbatch — they are plain numpy arrays (not batched
+        # JAX tensors) and must not be passed through _unbatch which would take only [0].
         if pieces and "debug" in outputs:
             tok = outputs["debug"].setdefault("tokens", {})
             tok.setdefault("task", {}).update({
@@ -124,17 +136,6 @@ class Policy(BasePolicy):
                 "piece_begin": pieces["state_piece_begin"],
                 "piece_end":   pieces["state_piece_end"],
             }
-
-        model_time = time.monotonic() - start_time
-
-        def _unbatch(x):
-            # Spans (Python ints) become 0-d JAX scalars after jit; pass them through unchanged.
-            a = np.asarray(x.detach().cpu() if self._is_pytorch_model else x)
-            if a.dtype.name == "bfloat16":
-                a = a.astype(np.float32)
-            return a[0] if a.ndim > 0 else a
-
-        outputs = jax.tree.map(_unbatch, outputs)
 
         outputs = self._output_transform(outputs)
         outputs["policy_timing"] = {
