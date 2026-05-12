@@ -25,13 +25,13 @@ from .common import (
     as_u8_rgb, resize_heatmap, overlay_heatmap,
     normalize_joint_minmax, clip_gamma_normalize_joint, log_clip_gamma_normalize_joint,
     get_attn_hs, get_v_skd, get_span, get_all_spans, select_heads,
-    score_v_cosine, make_task_text_panel,
+    score_v_cosine, make_task_text_panel, make_state_text_panel,
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260511_021509")
-OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi05_libero_20260511_021509/heatmap_combined")
+INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_151448")
+OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_151448/heatmap_combined")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 ACTION_TOKEN    = 0
@@ -52,8 +52,10 @@ IMG_DISPLAY = 420
 
 SMOOTHING = "BILINEAR"
 
+STATE_TILE_W = 42
+
 ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
-COL_LABELS = ["Base Camera", "Left Wrist", "Task Tokens"]
+COL_LABELS = ["Base Camera", "Left Wrist", "Task Tokens", "State Tokens"]
 
 
 # ─── Font ─────────────────────────────────────────────────────────────────────
@@ -81,6 +83,7 @@ def _draw_centered(draw: ImageDraw.ImageDraw, text: str,
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
     draw.text((x0 + (w - tw) // 2, y0 + (h - th) // 2), text, fill=(30, 30, 30), font=_FONT)
+
 
 
 # ─── Normalization ────────────────────────────────────────────────────────────
@@ -159,16 +162,43 @@ def process_one(npy_path: str, out_png: str) -> None:
         out[:n] = raw[:n]
         return out
 
+    _n_task = int(np.asarray(rec["outputs/debug/tokens/task/token_mask"]).sum())
+
+    def _pad_task(arr: np.ndarray) -> np.ndarray:
+        out = np.zeros(200, dtype=np.float32)
+        n = min(arr.size, _n_task)
+        out[:n] = arr[:n]
+        return out
+
     task_scores_per_method = [
-        np.asarray(rec["outputs/debug/gradcam/task"], dtype=np.float32),
-        np.asarray(rec[f"outputs/debug/raw_alpha/{VARIANT}/task"], dtype=np.float32),
+        _pad_task(np.asarray(rec["outputs/debug/gradcam/task"], dtype=np.float32)),
+        _pad_task(np.asarray(rec[f"outputs/debug/raw_alpha/{VARIANT}/task"], dtype=np.float32)),
         _rw_task(),
         _vc_task(),
     ]
 
+    # ── State scores per method ───────────────────────────────────────────────
+    state_span = get_span(rec, "outputs/debug/spans/state")
+    if state_span:
+        state_heads = select_heads(attn, state_span, all_spans, TOP_K_HEADS)
+        gc_state = np.abs(np.asarray(rec["outputs/debug/gradcam/state"], dtype=np.float32))
+        ra_state = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/{VARIANT}/state"], dtype=np.float32))
+        rw_state = attn[state_heads, state_span[0]:state_span[1]].max(axis=0)
+        vc_state = score_v_cosine(attn, v, state_heads)[state_span[0]:state_span[1]]
+        state_scores_per_method = [gc_state, ra_state, rw_state, vc_state]
+    else:
+        state_scores_per_method = [np.zeros(1, dtype=np.float32)] * 4
+
     # ── Task text panels (rows 1–4) ───────────────────────────────────────────
-    task_panels = [make_task_text_panel(rec, ts, row_h) for ts in task_scores_per_method]
+    n_task_tok  = (task_span[1] - task_span[0]) if task_span else None
+    task_panels = [make_task_text_panel(rec, ts, row_h, n_task_tokens=n_task_tok)
+                   for ts in task_scores_per_method]
     task_col_w  = max(p.width for p in task_panels)
+
+    # ── State token panels (rows 1–4) ─────────────────────────────────────────
+    state_panels = [make_state_text_panel(rec, ss, n_task_tok or 0, row_h, tile_w=STATE_TILE_W)
+                    for ss in state_scores_per_method]
+    state_col_w  = max(p.width for p in state_panels)
 
     # ── Overlay images per method ─────────────────────────────────────────────
     def _overlays(heats01: List[np.ndarray]) -> List[np.ndarray]:
@@ -183,16 +213,18 @@ def process_one(npy_path: str, out_png: str) -> None:
     n_rows = len(ROW_LABELS)
     n_cams = 2  # base + left wrist only; right wrist discarded
 
-    x_cams = [GAP_X + LABEL_W + GAP_X + c * (IMG_DISPLAY + GAP_X) for c in range(n_cams)]
-    x_task = x_cams[-1] + IMG_DISPLAY + GAP_X
+    x_cams  = [GAP_X + LABEL_W + GAP_X + c * (IMG_DISPLAY + GAP_X) for c in range(n_cams)]
+    x_task  = x_cams[-1] + IMG_DISPLAY + GAP_X
+    x_state = x_task + task_col_w + GAP_X
 
-    canvas_w = x_task + task_col_w + GAP_X
+    canvas_w = x_state + state_col_w + GAP_X
     canvas_h = GAP_Y + HEADER_H + n_rows * (GAP_Y + row_h) + GAP_Y
     canvas   = Image.new("RGB", (canvas_w, canvas_h), BG)
     draw     = ImageDraw.Draw(canvas)
 
     # Column headers
-    for lbl, x0, cw in zip(COL_LABELS, x_cams + [x_task], [IMG_DISPLAY] * n_cams + [task_col_w]):
+    for lbl, x0, cw in zip(COL_LABELS, x_cams + [x_task, x_state],
+                            [IMG_DISPLAY] * n_cams + [task_col_w, state_col_w]):
         _draw_centered(draw, lbl, x0, GAP_Y, cw, HEADER_H)
 
     # Data rows
@@ -204,6 +236,8 @@ def process_one(npy_path: str, out_png: str) -> None:
         if r > 0:
             panel = task_panels[r - 1]
             canvas.paste(panel, (x_task, y0 + (row_h - panel.height) // 2))
+            sp = state_panels[r - 1]
+            canvas.paste(sp, (x_state, y0 + (row_h - sp.height) // 2))
 
     Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_png)

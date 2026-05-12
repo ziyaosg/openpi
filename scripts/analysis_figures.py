@@ -41,8 +41,8 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260511_021509")
-OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi05_libero_20260511_021509/analysis")
+INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_151448")
+OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_151448/analysis")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 MAX_STEPS = 60   # cap per episode to keep runtime manageable
@@ -185,14 +185,16 @@ def extract(rec: dict, action_token: int = 0) -> dict:
     sp_base  = get_span(rec, f"outputs/debug/spans/image/{CAM_BASE}")
     sp_wrist = get_span(rec, f"outputs/debug/spans/image/{CAM_WRIST}")
     sp_task  = get_span(rec, "outputs/debug/spans/task")
+    sp_state = get_span(rec, "outputs/debug/spans/state")
 
-    all_spans = [s for s in [sp_base, sp_wrist, sp_task] if s is not None]
+    all_spans = [s for s in [sp_base, sp_wrist, sp_task, sp_state] if s is not None]
     if len(all_spans) < 2:
         raise ValueError("Insufficient spans in record")
 
     base_heads  = select_heads(attn, sp_base,  all_spans, TOP_K_HEADS) if sp_base  else None
     wrist_heads = select_heads(attn, sp_wrist, all_spans, TOP_K_HEADS) if sp_wrist else None
     task_heads  = select_heads(attn, sp_task,  all_spans, TOP_K_HEADS) if sp_task  else None
+    state_heads = select_heads(attn, sp_state, all_spans, TOP_K_HEADS) if sp_state else None
 
     # ── Gini: base camera ──────────────────────────────────────────────────────
     gc_base = np.abs(np.asarray(rec["outputs/debug/gradcam/image/base_0_rgb"], dtype=np.float32))
@@ -228,6 +230,17 @@ def extract(rec: dict, action_token: int = 0) -> dict:
         gc_task = ra_task = rw_task = vc_task = None
         gini_task = _NAN_GINI4
 
+    # ── Gini: state tokens ─────────────────────────────────────────────────────
+    if sp_state and state_heads is not None:
+        gc_state = np.abs(np.asarray(rec["outputs/debug/gradcam/state"], dtype=np.float32))
+        ra_state = np.abs(np.asarray(rec["outputs/debug/raw_alpha/summation/state"], dtype=np.float32))
+        rw_state = attn[state_heads, sp_state[0]:sp_state[1]].max(axis=0)
+        vc_state = score_v_cosine(attn, v, state_heads)[sp_state[0]:sp_state[1]]
+        gini_state = (_gini(gc_state), _gini(ra_state), _gini(rw_state), _gini(vc_state))
+    else:
+        gc_state = ra_state = rw_state = vc_state = None
+        gini_state = _NAN_GINI4
+
     # ── Attention modality fractions ───────────────────────────────────────────
     def _frac(sp):
         return float(attn[:, sp[0]:sp[1]].sum(axis=1).mean()) if sp else 0.0
@@ -235,6 +248,7 @@ def extract(rec: dict, action_token: int = 0) -> dict:
     base_frac  = _frac(sp_base)
     wrist_frac = _frac(sp_wrist)
     task_frac  = _frac(sp_task)
+    state_frac = _frac(sp_state)
 
     # ── Task-token inter-head agreement ────────────────────────────────────────
     if sp_task and task_heads is not None and len(task_heads) > 1:
@@ -268,6 +282,12 @@ def extract(rec: dict, action_token: int = 0) -> dict:
     else:
         task_agr = _NAN4
 
+    # ── Attribution agreement — state tokens ───────────────────────────────────
+    if gc_state is not None:
+        state_agr = _tok_agreement([gc_state, ra_state, rw_state, vc_state])
+    else:
+        state_agr = _NAN4
+
     state = np.asarray(rec.get("outputs/state", np.zeros(32)), dtype=np.float64)
     action0 = actions[0].copy()
 
@@ -278,12 +298,16 @@ def extract(rec: dict, action_token: int = 0) -> dict:
         "gini_wrist_rw": gini_wrist[2], "gini_wrist_vc": gini_wrist[3],
         "gini_task_gc":  gini_task[0],  "gini_task_ra":  gini_task[1],
         "gini_task_rw":  gini_task[2],  "gini_task_vc":  gini_task[3],
-        "base_frac": base_frac, "wrist_frac": wrist_frac, "task_frac": task_frac,
+        "gini_state_gc": gini_state[0], "gini_state_ra": gini_state[1],
+        "gini_state_rw": gini_state[2], "gini_state_vc": gini_state[3],
+        "base_frac": base_frac, "wrist_frac": wrist_frac,
+        "task_frac": task_frac, "state_frac": state_frac,
         "task_head_agr": task_head_agr,
         "trans_flip": trans_flip, "rot_flip": rot_flip, "grip_flip": grip_flip,
         **{f"base_{pn}_{m}":  base_agr[pn][m]  for pn in PAIR_NAMES for m in ("cosine","iou","com_dist","emd")},
         **{f"wrist_{pn}_{m}": wrist_agr[pn][m] for pn in PAIR_NAMES for m in ("cosine","iou","com_dist","emd")},
         **{f"task_{pn}_{m}":  task_agr[pn][m]  for pn in PAIR_NAMES for m in ("cosine","iou","com_dist","emd")},
+        **{f"state_{pn}_{m}": state_agr[pn][m] for pn in PAIR_NAMES for m in ("cosine","iou","com_dist","emd")},
         "_state":   state,
         "_action0": action0,
     }
@@ -400,6 +424,7 @@ def fig1_gini(ep_data: EpData):
     _gini_fig(ep_data, "base",  "Base Camera",        "fig1a_gini_base.png")
     _gini_fig(ep_data, "wrist", "Left Wrist Camera",  "fig1b_gini_wrist.png")
     _gini_fig(ep_data, "task",  "Task Tokens",         "fig1c_gini_task.png")
+    _gini_fig(ep_data, "state", "State Tokens",        "fig1d_gini_state.png")
 
 
 def fig2_attention_routing(ep_data: EpData):
@@ -407,6 +432,7 @@ def fig2_attention_routing(ep_data: EpData):
         ("base_frac",  "Attn fraction", "Base camera attention fraction"),
         ("wrist_frac", "Attn fraction", "Left wrist camera attention fraction"),
         ("task_frac",  "Attn fraction", "Task token attention fraction"),
+        ("state_frac", "Attn fraction", "State token attention fraction"),
     ]
     fig, axes = _make_fig(len(specs), "Attention Routing — Modality Fractions")
     for ax, (key, yl, title) in zip(axes, specs):
@@ -462,6 +488,7 @@ def fig6_attribution(ep_data: EpData):
     _attribution_fig(ep_data, "base",  "Base Camera",        is_2d=True,  fname_prefix="fig6a_base_attribution")
     _attribution_fig(ep_data, "wrist", "Left Wrist Camera",  is_2d=True,  fname_prefix="fig6b_wrist_attribution")
     _attribution_fig(ep_data, "task",  "Task Tokens",         is_2d=False, fname_prefix="fig6c_task_attribution")
+    _attribution_fig(ep_data, "state", "State Tokens",        is_2d=False, fname_prefix="fig6d_state_attribution")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

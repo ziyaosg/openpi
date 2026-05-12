@@ -310,52 +310,180 @@ def _get_sp():
     return _sp
 
 
-def make_task_text_panel(
-    record: dict,
-    task_scores: np.ndarray,        # raw scores per task-token position (200,)
+def _chars_and_norm(
+    scores: np.ndarray,
+    piece_id: np.ndarray,
+    piece_begin: np.ndarray,
+    piece_end: np.ndarray,
+    strip_prefix: str = "",
+    strip_suffix: str = "",
+) -> Tuple[List[str], np.ndarray]:
+    """Expand per-token scores to per-character arrays, filtering prefix/suffix.
+
+    Returns (chars, norm_scores) where each element is one character of the
+    content region and its attribution score normalised to [0, 1].
+    """
+    sp = _get_sp()
+    decoded = sp.decode(piece_id.tolist())
+    content_start = len(strip_prefix)
+    content_end   = len(decoded) - len(strip_suffix) if strip_suffix else len(decoded)
+
+    chars: List[str] = []
+    token_scores: List[float] = []
+    for i, (b, e) in enumerate(zip(piece_begin.tolist(), piece_end.tolist())):
+        for j in range(int(b), int(e)):
+            if content_start <= j < content_end:
+                chars.append(decoded[j])
+                token_scores.append(float(scores[i]) if i < len(scores) else 0.0)
+
+    values = np.abs(np.array(token_scores, dtype=np.float32))
+    maxv   = float(values.max()) if values.size > 0 else 0.0
+    norm   = values / maxv if maxv > 0 else np.zeros_like(values)
+    return chars, norm
+
+
+def _render_char_heatmap(
+    scores: np.ndarray,
+    piece_id: np.ndarray,
+    piece_begin: np.ndarray,
+    piece_end: np.ndarray,
+    strip_prefix: str,
+    strip_suffix: str,
+    title: str,
     target_height_px: int,
-    bg: Tuple[int, int, int] = (255, 255, 255),
 ) -> Image.Image:
-    """Render a task-token heatmap panel sized to target_height_px."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    token_ids = np.asarray(record["outputs/debug/tokens/task/token_ids"])   # (200,)
-    token_mask = np.asarray(record["outputs/debug/tokens/task/token_mask"])  # (200,)
-
-    sp = _get_sp()
-    real_ids = token_ids[token_mask].tolist()
-    real_scores = task_scores[token_mask].astype(np.float32)
-
-    labels = [sp.id_to_piece(tid).replace("▁", " ").strip() for tid in real_ids]
-
-    abs_scores = np.abs(real_scores)
-    mx = abs_scores.max()
-    norm_scores = abs_scores / mx if mx > 1e-9 else np.zeros_like(abs_scores)
-
-    n = max(len(real_ids), 1)
+    chars, norm = _chars_and_norm(scores, piece_id, piece_begin, piece_end,
+                                   strip_prefix=strip_prefix, strip_suffix=strip_suffix)
+    n   = max(len(chars), 1)
     dpi = 150
-    fig_w = max(n * 0.22, 3.0)
+    fig_w = max(n * 0.08, 2.0)
     fig_h = 2.5
 
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=dpi)
-    for i, (label, score) in enumerate(zip(labels, norm_scores)):
-        r, g, b, _ = jet_color(float(score))
+    for i, (c, v) in enumerate(zip(chars, norm)):
+        r, g, b, _ = jet_color(float(v))
         ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=(r, g, b)))
-        lum = 0.299 * r + 0.587 * g + 0.114 * b
-        tc = "black" if lum > 0.45 else "white"
-        ax.text(i + 0.5, 0.5, label, ha="center", va="center",
-                fontsize=6, rotation=90, color=tc)
-
-    ax.set_xlim(0, n)
-    ax.set_ylim(0, 1)
-    ax.set_title("Task tokens", fontsize=8, pad=2)
-    ax.axis("off")
+        ax.text(i + 0.5, 0.5, c, ha="center", va="center", fontsize=7, color="black")
+    ax.set_xlim(0, n); ax.set_ylim(0, 1)
+    ax.set_title(title, fontsize=8, pad=2); ax.axis("off")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0.05)
-    plt.close(fig)
+    plt.close(fig); buf.seek(0)
+    pil   = Image.open(buf).convert("RGB")
+    ratio = target_height_px / pil.height
+    return pil.resize((max(int(pil.width * ratio), 1), target_height_px), Image.BILINEAR)
+
+
+def _render_piece_heatmap(
+    scores: np.ndarray,
+    piece_ids: List[int],
+    title: str,
+    target_height_px: int,
+    tile_w_in: float = 0.22,
+) -> Image.Image:
+    """Fallback: one tile per subword piece (no character-level expansion)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sp  = _get_sp()
+    labels = [sp.id_to_piece(tid).replace("▁", " ").strip() for tid in piece_ids]
+    abs_s  = np.abs(scores).astype(np.float32)
+    mx     = abs_s.max()
+    norm   = abs_s / mx if mx > 1e-9 else np.zeros_like(abs_s)
+    n      = max(len(labels), 1)
+    dpi    = 150
+    fig, ax = plt.subplots(figsize=(max(n * tile_w_in, 3.0), 2.5), dpi=dpi)
+    for i, (label, v) in enumerate(zip(labels, norm)):
+        r, g, b, _ = jet_color(float(v))
+        ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=(r, g, b)))
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        ax.text(i + 0.5, 0.5, label, ha="center", va="center",
+                fontsize=6, rotation=90, color="black" if lum > 0.45 else "white")
+    ax.set_xlim(0, n); ax.set_ylim(0, 1)
+    ax.set_title(title, fontsize=8, pad=2); ax.axis("off")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", pad_inches=0.05)
+    plt.close(fig); buf.seek(0)
+    pil   = Image.open(buf).convert("RGB")
+    ratio = target_height_px / pil.height
+    return pil.resize((max(int(pil.width * ratio), 1), target_height_px), Image.BILINEAR)
+
+
+def make_task_text_panel(
+    record: dict,
+    task_scores: np.ndarray,        # raw scores per task-token position (200,)
+    target_height_px: int,
+    n_task_tokens: Optional[int] = None,
+    bg: Tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    """Render task-token heatmap.
+
+    Uses piece spans (strip 'Task: ' prefix and ', ' suffix) when available in
+    the record; falls back to subword-piece tiles otherwise.
+    """
+    piece_id_key = "outputs/debug/tokens/task/piece_id"
+    if piece_id_key in record:
+        piece_id    = np.asarray(record[piece_id_key])
+        piece_begin = np.asarray(record["outputs/debug/tokens/task/piece_begin"])
+        piece_end   = np.asarray(record["outputs/debug/tokens/task/piece_end"])
+        n = len(piece_id)
+        scores = np.abs(task_scores[:n]).astype(np.float32)
+        return _render_char_heatmap(scores, piece_id, piece_begin, piece_end,
+                                    strip_prefix="Task: ", strip_suffix=", ",
+                                    title="Task", target_height_px=target_height_px)
+
+    # Fallback: use token_ids / token_mask
+    token_ids  = np.asarray(record["outputs/debug/tokens/task/token_ids"])
+    token_mask = np.asarray(record["outputs/debug/tokens/task/token_mask"])
+    sp = _get_sp()
+    real_ids    = token_ids[token_mask].tolist()
+    real_scores = task_scores[token_mask].astype(np.float32)
+    if n_task_tokens is not None:
+        real_ids    = real_ids[:n_task_tokens]
+        real_scores = real_scores[:n_task_tokens]
+    return _render_piece_heatmap(np.abs(real_scores), real_ids, "Task tokens", target_height_px)
+
+
+def make_state_text_panel(
+    record: dict,
+    state_scores: np.ndarray,       # raw scores, length = number of state tokens
+    n_task_tokens: int,              # task token count to skip (fallback path only)
+    target_height_px: int,
+    tile_w: int = 42,
+    bg: Tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    """Render state-token heatmap.
+
+    Uses piece spans (strip 'State: ' prefix and ';\\n' suffix) when available;
+    falls back to subword-piece tiles otherwise.
+    """
+    piece_id_key = "outputs/debug/tokens/state/piece_id"
+    if piece_id_key in record:
+        piece_id    = np.asarray(record[piece_id_key])
+        piece_begin = np.asarray(record["outputs/debug/tokens/state/piece_begin"])
+        piece_end   = np.asarray(record["outputs/debug/tokens/state/piece_end"])
+        n = min(len(piece_id), len(state_scores))
+        scores = np.abs(state_scores[:n]).astype(np.float32)
+        return _render_char_heatmap(scores, piece_id[:n], piece_begin[:n], piece_end[:n],
+                                    strip_prefix="State: ", strip_suffix=";\n",
+                                    title="State", target_height_px=target_height_px)
+
+    # Fallback: decode from shared token buffer
+    token_ids  = np.asarray(record["outputs/debug/tokens/task/token_ids"])
+    token_mask = np.asarray(record["outputs/debug/tokens/task/token_mask"])
+    sp = _get_sp()
+    all_real_ids = token_ids[token_mask].tolist()
+    state_ids    = all_real_ids[n_task_tokens:]
+    n            = max(min(len(state_ids), len(state_scores)), 1)
+    return _render_piece_heatmap(np.abs(state_scores[:n]).astype(np.float32),
+                                  state_ids[:n], "State tokens", target_height_px,
+                                  tile_w_in=tile_w / 150)
     buf.seek(0)
 
     pil = Image.open(buf).convert("RGB")
