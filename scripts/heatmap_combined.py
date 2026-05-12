@@ -30,8 +30,8 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_151448")
-OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_151448/heatmap_combined")
+INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_180436")
+OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_180436/heatmap_combined")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 ACTION_TOKEN    = 0

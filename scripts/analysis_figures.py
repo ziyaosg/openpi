@@ -41,13 +41,14 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_151448")
-OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_151448/analysis")
+INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_180436")
+OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_180436/analysis")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 MAX_STEPS = 60   # cap per episode to keep runtime manageable
 
-# Only episodes from tasks that appear in both outcomes (success + failure)
+# Only episodes from tasks that appear in both outcomes (success + failure).
+# Set False when running with num_trials_per_task=1 (no task has both outcomes).
 FILTER_MIXED_TASKS = True
 
 METHOD_NAMES = ["GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
