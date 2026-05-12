@@ -9,6 +9,7 @@ Layout (6 rows × 4 modality columns):
 from __future__ import annotations
 
 import glob
+from collections import defaultdict
 from pathlib import Path
 from typing import List
 
@@ -36,6 +37,8 @@ from .grid_visualization_raw_alpha import clip_normalize_joint, CLIP_PERCENTILE,
 INPUT_DIR              = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629"
 OUTPUT_DIR             = "/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260511_040629/heatmap_raw_alpha_tokens"
 EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629/client_output/episode_summaries.json"
+
+MAX_EPISODES_PER_TASK = 3   # set to None for unlimited
 
 NUM_ACTION_TOKENS = 5
 APPLY_ABS         = True
@@ -184,10 +187,37 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No step_*.npy found in {INPUT_DIR}")
 
+    # Pre-scan existing episode dirs so subsequent runs pick up from where they left off.
+    # Keys: task_id → set of episode_nums that already have (or are being) visualized.
+    allowed_episodes: dict = defaultdict(set)
+    if out_dir.exists():
+        for task_dir in out_dir.iterdir():
+            if not task_dir.is_dir() or not task_dir.name.startswith("t"):
+                continue
+            try:
+                task_id = int(task_dir.name.split("_")[0][1:])
+            except (ValueError, IndexError):
+                continue
+            for ep_dir in task_dir.iterdir():
+                if ep_dir.is_dir() and ep_dir.name.startswith("ep"):
+                    try:
+                        ep_num = int(ep_dir.name.split("_")[0][2:])
+                        allowed_episodes[task_id].add(ep_num)
+                    except (ValueError, IndexError):
+                        pass
+
     skipped = 0
     for f in files:
         s   = step_index(f)
         ep  = episode_for_step(s, episodes)
+
+        if MAX_EPISODES_PER_TASK is not None:
+            if ep.episode_num not in allowed_episodes[ep.task_id]:
+                if len(allowed_episodes[ep.task_id]) >= MAX_EPISODES_PER_TASK:
+                    skipped += 1
+                    continue
+                allowed_episodes[ep.task_id].add(ep.episode_num)
+
         out = str(
             out_dir
             / f"t{ep.task_id}_{slugify(ep.task)}"
