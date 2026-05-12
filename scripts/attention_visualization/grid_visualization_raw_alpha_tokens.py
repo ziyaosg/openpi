@@ -38,7 +38,7 @@ INPUT_DIR              = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_
 OUTPUT_DIR             = "/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260511_040629/heatmap_raw_alpha_tokens"
 EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629/client_output/episode_summaries.json"
 
-MAX_EPISODES_PER_TASK = 3   # set to None for unlimited
+MAX_EPISODES_PER_TASK = 6   # set to None for unlimited
 
 NUM_ACTION_TOKENS = 5
 APPLY_ABS         = True

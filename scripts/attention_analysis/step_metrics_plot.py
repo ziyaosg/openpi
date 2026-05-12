@@ -44,12 +44,13 @@ from scripts.attention_utils.keys import CAM_NAMES, IMAGE_PATCH_GRID
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR     = Path("/home/ziyao/Documents/policy_records_20260423_180932")
-EPISODE_JSON = DATA_DIR / "episode_summaries.json"
-OUTPUT_DIR   = DATA_DIR / "step_metric_plots"
+DATA_DIR     = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629")
+EPISODE_JSON = DATA_DIR / "client_output" / "episode_summaries.json"
+OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260511_040629/analysis")
 
-MIXED_TASK_IDS: set[int] = {2, 3, 5, 6, 9}
-MAX_STEPS = 50
+FILTER_MIXED_TASKS = True   # only tasks with both success and failure episodes
+ACTION_TOKEN = 0            # which action token index to use for gradcam/raw_alpha
+MAX_STEPS = 60
 
 PATCH_H, PATCH_W = IMAGE_PATCH_GRID
 CAM_BASE   = "base_0_rgb"
@@ -271,9 +272,9 @@ def extract(rec: dict) -> dict:
 
     # ── Attribution agreement — base cam (base-focused heads for rw/vc) ───────
     gc_h = np.abs(to_2d_heatmap(
-        np.asarray(rec[f"outputs/debug/gradcam/image/{CAM_BASE}"]), CAM_BASE))
+        np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
     ra_h = np.abs(to_2d_heatmap(
-        np.asarray(rec[f"outputs/debug/raw_alpha/summation/image/{CAM_BASE}"]), CAM_BASE))
+        np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
     rw_h = attn_tgt[base_heads, sp_base[0]:sp_base[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
     vc_h = score_v_cosine(attn_tgt, v_tgt, base_heads)[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
     base_agr = _cam_agreement([gc_h, ra_h, rw_h, vc_h])
@@ -285,9 +286,9 @@ def extract(rec: dict) -> dict:
     if sp_wrists and wrist_heads is not None:
         sp_w, cam_w = sp_wrists[0], CAM_WRISTS[0]
         gc_hw = np.abs(to_2d_heatmap(
-            np.asarray(rec[f"outputs/debug/gradcam/image/{cam_w}"]), cam_w))
+            np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{cam_w}"]), cam_w))
         ra_hw = np.abs(to_2d_heatmap(
-            np.asarray(rec[f"outputs/debug/raw_alpha/summation/image/{cam_w}"]), cam_w))
+            np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{cam_w}"]), cam_w))
         rw_hw = attn_tgt[wrist_heads, sp_w[0]:sp_w[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
         vc_hw = score_v_cosine(attn_tgt, v_tgt, wrist_heads)[sp_w[0]:sp_w[1]].reshape(PATCH_H, PATCH_W)
         wrist_agr  = _cam_agreement([gc_hw, ra_hw, rw_hw, vc_hw])
@@ -299,8 +300,8 @@ def extract(rec: dict) -> dict:
 
     # ── Attribution agreement — task tokens (task-focused heads for rw/vc) ────
     if sp_task and task_heads is not None:
-        gc_task = np.abs(np.asarray(rec["outputs/debug/gradcam/task"])[0])
-        ra_task = np.abs(np.asarray(rec["outputs/debug/raw_alpha/summation/task"])[0])
+        gc_task = np.abs(np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/task"])[0])
+        ra_task = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/task"])[0])
         rw_task = attn_tgt[task_heads, sp_task[0]:sp_task[1]].max(axis=0)
         vc_task = score_v_cosine(attn_tgt, v_tgt, task_heads)[sp_task[0]:sp_task[1]]
         task_agr  = _tok_agreement([gc_task, ra_task, rw_task, vc_task])
@@ -311,8 +312,8 @@ def extract(rec: dict) -> dict:
 
     # ── Attribution agreement — state tokens (state-focused heads for rw/vc) ──
     if sp_state and state_heads is not None:
-        gc_state = np.abs(np.asarray(rec["outputs/debug/gradcam/state"])[0])
-        ra_state = np.abs(np.asarray(rec["outputs/debug/raw_alpha/summation/state"])[0])
+        gc_state = np.abs(np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/state"])[0])
+        ra_state = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/state"])[0])
         rw_state = attn_tgt[state_heads, sp_state[0]:sp_state[1]].max(axis=0)
         vc_state = score_v_cosine(attn_tgt, v_tgt, state_heads)[sp_state[0]:sp_state[1]]
         state_agr  = _tok_agreement([gc_state, ra_state, rw_state, vc_state])
@@ -376,8 +377,12 @@ def load_episode(ep: dict) -> List[dict]:
         if not fpath.exists():
             continue
 
-        rec   = np.load(fpath, allow_pickle=True).item()
-        feats = extract(rec)
+        try:
+            rec   = np.load(fpath, allow_pickle=True).item()
+            feats = extract(rec)
+        except Exception as e:
+            print(f"    [warn] step {s}: {e}")
+            continue
 
         state   = feats.pop("_state")
         action0 = feats.pop("_action0")
@@ -594,13 +599,24 @@ def main():
     with open(EPISODE_JSON) as f:
         all_eps = json.load(f)
 
-    mixed = [e for e in all_eps if e["task_id"] in MIXED_TASK_IDS]
+    if FILTER_MIXED_TASKS:
+        from collections import defaultdict
+        outcomes: dict = defaultdict(set)
+        for ep in all_eps:
+            outcomes[ep["task_id"]].add(ep["success"])
+        mixed_ids = {tid for tid, outs in outcomes.items() if len(outs) == 2}
+        episodes = [ep for ep in all_eps if ep["task_id"] in mixed_ids]
+        print(f"Mixed-outcome tasks: {sorted(mixed_ids)}")
+        print(f"Episodes to process: {len(episodes)} / {len(all_eps)}")
+    else:
+        episodes = all_eps
+
     ep_data: EpData = {"success": [], "failure": []}
 
-    print(f"Loading {len(mixed)} episodes …")
-    for i, ep in enumerate(mixed, 1):
+    print(f"Loading {len(episodes)} episodes …")
+    for i, ep in enumerate(episodes, 1):
         label = "success" if ep["success"] else "failure"
-        print(f"  [{i:2d}/{len(mixed)}] task {ep['task_id']} ep{ep['episode_num']:02d} ({label})",
+        print(f"  [{i:3d}/{len(episodes)}] task {ep['task_id']} ep{ep['episode_num']:03d} ({label})",
               end=" … ", flush=True)
         records = load_episode(ep)
         ep_data[label].append(records)
