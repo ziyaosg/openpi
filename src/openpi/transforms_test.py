@@ -73,7 +73,7 @@ def test_tokenize_prompt():
 
     data = transform({"prompt": "Hello, world!"})
 
-    tok_prompt, tok_mask = tokenizer.tokenize("Hello, world!")
+    tok_prompt, tok_mask, _, _ = tokenizer.tokenize("Hello, world!")
     assert np.allclose(tok_prompt, data["tokenized_prompt"])
     assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
 

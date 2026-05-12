@@ -42,7 +42,7 @@ from .common import (
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 INPUT_DIR    = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260511_021509")
-OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_policy_records_pi05_libero_20260511_021509/analysis")
+OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi05_libero_20260511_021509/analysis")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 MAX_STEPS = 60   # cap per episode to keep runtime manageable

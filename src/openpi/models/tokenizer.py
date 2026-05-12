@@ -19,18 +19,42 @@ class PaligemmaTokenizer:
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
-    def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    def tokenize(
+        self, prompt: str, state: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray, int | None, int | None]:
+        """Tokenize a prompt (and optional discretized state) into token IDs and a validity mask.
+
+        Returns:
+            tokens: int32 array of shape (max_len,).
+            mask: bool array of shape (max_len,), True for real tokens.
+            task_token_len: number of tokens before the state digits (task-language prefix), or None.
+            state_token_len: number of tokens for the state digit string, or None.
+        """
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
+        task_token_len: int | None = None
+        state_token_len: int | None = None
+
         if state is not None:
-            # This is the Pi05 format, where the state is part of the discrete language input.
+            # π0.5 format: proprioceptive state discretized into 256 bins and appended as text tokens.
             discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
             state_str = " ".join(map(str, discretized_state))
             full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
             tokens = self._tokenizer.encode(full_prompt, add_bos=True)
+
+            # Compute task/state token boundary for per-modality attribution.
+            # In SentencePiece, trailing spaces merge into the next token's ▁ prefix, so
+            # "Task: ..., State: " tokenizes to the same prefix as the full string's first N tokens.
+            task_prefix_ids = self._tokenizer.encode(f"Task: {cleaned_text}, State: ", add_bos=True)
+            task_token_len = len(task_prefix_ids)
+            suffix_ids = self._tokenizer.encode(";\nAction: ")
+            # Clamp to the effective sequence length (before padding/truncation).
+            effective_len = min(len(tokens), self._max_len)
+            state_token_len = max(0, min(len(tokens) - task_token_len - len(suffix_ids),
+                                         effective_len - task_token_len))
         else:
-            # This is the Pi0 format, where the state is part of the continuous action expert input.
-            # tokenize "\n" separately as the "start of answer" token
+            # π0 format: state is a continuous suffix token, not embedded in the prompt.
             tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
+
         tokens_len = len(tokens)
         if tokens_len < self._max_len:
             padding = [False] * (self._max_len - tokens_len)
@@ -45,7 +69,7 @@ class PaligemmaTokenizer:
             tokens = tokens[: self._max_len]
             mask = [True] * self._max_len
 
-        return np.asarray(tokens), np.asarray(mask)
+        return np.asarray(tokens), np.asarray(mask), task_token_len, state_token_len
 
 
 class FASTTokenizer:

@@ -124,6 +124,13 @@ class Observation(Generic[ArrayT]):
                 data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
             elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
                 data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+        # task_token_len and state_token_len are Python ints (static, non-traced in JIT).
+        # The policy batches all dict values via jax.tree.map → JAX arrays; convert back.
+        def _to_python_int(val) -> int | None:
+            if val is None:
+                return None
+            return int(np.asarray(val).ravel()[0])
+
         return cls(
             images=data["image"],
             image_masks=data["image_mask"],
@@ -132,8 +139,8 @@ class Observation(Generic[ArrayT]):
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
             token_loss_mask=data.get("token_loss_mask"),
-            task_token_len=data.get("task_token_len"),
-            state_token_len=data.get("state_token_len"),
+            task_token_len=_to_python_int(data.get("task_token_len")),
+            state_token_len=_to_python_int(data.get("state_token_len")),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -213,6 +220,8 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
+        task_token_len=observation.task_token_len,
+        state_token_len=observation.state_token_len,
     )
 
 

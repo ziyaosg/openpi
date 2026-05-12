@@ -281,11 +281,13 @@ class Pi0(_model.BaseModel):
           - Layer 1: head-selection patterns are stable; good for modality attribution.
           - Layer 16: spatial concentration is sharpest; good for image heatmaps.
 
-        Token spans (pi0.5, libero example with 3 cameras):
+        Token spans (π0.5, libero example with 3 cameras, max_token_len=200):
           - base_0_rgb:        [0   : 256)
           - left_wrist_0_rgb:  [256 : 512)
           - right_wrist_0_rgb: [512 : 768)   (masked, but still present in sequence)
-          - task tokens:        [768 : 768+tok_len)
+          - task tokens:        [768 : 768+task_token_len)   (tokenized_prompt prefix)
+          - state tokens:       [768+task_token_len : 768+task_token_len+state_token_len)
+          - suffix/action tokens: beyond prefix_len (not in key_end for π0.5)
         """
         batch_size = prefix_tokens.shape[0]
 
@@ -298,11 +300,42 @@ class Pi0(_model.BaseModel):
             meta["image_grids"][name] = _PATCH_GRID
             cur += _N_PATCHES
 
+        images_end = cur  # absolute position where image tokens end
+
         if observation.tokenized_prompt is not None:
             tok_len = observation.tokenized_prompt.shape[1]
-            spans["task"] = (cur, cur + tok_len)
+            if self.pi05 and observation.task_token_len is not None:
+                # π0.5: task span covers only the task-language prefix, not state digits or suffix.
+                # Using tok_len (max_token_len) would include state tokens and inflate task_mass.
+                spans["task"] = (cur, cur + observation.task_token_len)
+            else:
+                spans["task"] = (cur, cur + tok_len)
 
         prefix_len = prefix_tokens.shape[1]  # == cur (+ tok_len if prompt present)
+
+        # For π0.5: state tokens live inside the tokenized_prompt prefix.
+        # task_token_len / state_token_len are set by TokenizePrompt when
+        # discrete_state_input=True; they are Python ints (static in JIT).
+        if self.pi05:
+            if observation.task_token_len is not None and (observation.state_token_len or 0) > 0:
+                state_abs_start = images_end + observation.task_token_len
+                state_abs_end = state_abs_start + observation.state_token_len
+                spans["state"] = (state_abs_start, state_abs_end)
+                logger.info(
+                    "π0.5 token spans — images: %s, task: %s, state: %s (len=%d), prefix_len=%d",
+                    {k: v for k, v in spans["image"].items()},
+                    spans.get("task"),
+                    spans["state"],
+                    observation.state_token_len,
+                    prefix_len,
+                )
+            else:
+                logger.warning(
+                    "π0.5: no proprioceptive state tokens in prefix — "
+                    "task_token_len=%s, state_token_len=%s. "
+                    "Check discrete_state_input in model config.",
+                    observation.task_token_len, observation.state_token_len,
+                )
 
         # ── Gradient-based attribution (GradCAM + raw_alpha) ──────────────
         # Differentiate the sum of action-velocity (at t=1) w.r.t. prefix embeddings.
@@ -344,14 +377,15 @@ class Pi0(_model.BaseModel):
         grads = jax.grad(score_fn)(prefix_tokens)
 
         debug: dict = {
-            "gradcam": {"image": {}, "task": None},
+            "gradcam": {"image": {}, "task": None, "state": None},
             "raw_alpha": {
-                "summation": {"image": {}, "task": None},
-                "norm": {"image": {}, "task": None},
+                "summation": {"image": {}, "task": None, "state": None},
+                "norm": {"image": {}, "task": None, "state": None},
             },
             "tokens": {},
             "attn": {},
             "spans": spans,
+            "attention_mass": {},
         }
 
         # ── GradCAM for image patches ──────────────────────────────────────
@@ -383,11 +417,13 @@ class Pi0(_model.BaseModel):
             task_ra, task_rn     = raw_alpha_from_tokens(task_grads)
 
             # Mask out padding tokens so they don't pollute the visualization.
+            # Slice to span width: for π0.5 the task span is narrower than tokenized_prompt.
             token_mask = observation.tokenized_prompt_mask
             if token_mask is not None:
-                task_scores = task_scores * token_mask.astype(task_scores.dtype)
-                task_ra     = task_ra     * token_mask.astype(task_ra.dtype)
-                task_rn     = task_rn     * token_mask.astype(task_rn.dtype)
+                span_mask = token_mask[:, : t1 - t0]
+                task_scores = task_scores * span_mask.astype(task_scores.dtype)
+                task_ra     = task_ra     * span_mask.astype(task_ra.dtype)
+                task_rn     = task_rn     * span_mask.astype(task_rn.dtype)
 
             debug["gradcam"]["task"] = task_scores
             debug["raw_alpha"]["summation"]["task"] = task_ra
@@ -397,10 +433,9 @@ class Pi0(_model.BaseModel):
                 "token_mask": token_mask,
             }
 
-            # For pi0.5 with discrete state input (aloha / droid configs), the tokenized_prompt
-            # contains both task and state tokens concatenated: "Task: ..., State: {bins};\nAction: ".
-            # task_token_len is set by the FAST-style tokenizer when used; for the plain
-            # PaligemmaTokenizer used by pi0.5, it is None and we skip the split.
+            # For π0.5 with discrete state input, the tokenized_prompt contains both task
+            # and state tokens: "Task: ..., State: {bins};\nAction: ".
+            # task_token_len / state_token_len are set by TokenizePrompt (PaligemmaTokenizer).
             if observation.task_token_len is not None:
                 task_len = observation.task_token_len
                 state_len = observation.state_token_len
@@ -434,12 +469,11 @@ class Pi0(_model.BaseModel):
 
         # Returns 3-tuple because record_attn=True:
         #   [None, suf_out]  — hidden states (we discard them here)
-        #   kv_new           — updated KV cache (also discarded)
+        #   kv_new           — updated KV cache; contains V vectors for prefix + suffix tokens
         #   attn_probs       — shape [depth, B, K, G, T_suffix, T_prefix+T_suffix]
-        #                      T_suffix = action_horizon (e.g. 10 for libero)
-        #                      T_prefix+suffix because the action expert attends to both
-        #                      its own suffix tokens AND the prefix (via KV cache concat).
-        _outputs, _kv_new, attn_probs = record_module.apply(
+        #                      T_suffix = 1 (state) + action_horizon for pi05=False,
+        #                                 action_horizon only for pi05=True
+        _outputs, kv_new, attn_probs = record_module.apply(
             variables,
             [None, suf_tok],   # only action expert (index 1) runs; PaliGemma is None
             suf_pos,
@@ -448,28 +482,76 @@ class Pi0(_model.BaseModel):
             kv_cache=kv_cache, # prefix KV cache from the regular sample_actions fill
         )
 
-        # Slice to (a) selected layers and (b) prefix-only key positions.
-        # attn_probs[l, b, K, G, t_action, :prefix_len] = how much action token t_action
-        # attends to prefix token p at layer l, head group (K,G).
-        attn_weights = attn_probs[_ATTN_LAYERS, :, :, :, :, :prefix_len]  # [2, B, K, G, T_suf, T_pfx]
+        # For non-π0.5: a single continuous state token sits at the front of the suffix
+        # (key position prefix_len). Include it in the recorded key window.
+        # For π0.5: state tokens are already within the prefix (key_end = prefix_len suffices).
+        has_suffix_state_token = not self.pi05
+        key_end = prefix_len + (1 if has_suffix_state_token else 0)
+        if has_suffix_state_token:
+            spans["state"] = (prefix_len, prefix_len + 1)
+
+        # Validate GQA: π0.5 uses num_kv_heads=1 (paper Appendix E).
+        K_heads = attn_probs.shape[2]
+        G_groups = attn_probs.shape[3]
+        if self.pi05 and K_heads != 1:
+            logger.warning("π0.5 expected num_kv_heads=1 (GQA), but recorded K=%d", K_heads)
+        elif self.pi05:
+            logger.info(
+                "π0.5 GQA confirmed: num_kv_heads=%d, query_groups_per_kv=%d → %d total query heads",
+                K_heads, G_groups, K_heads * G_groups,
+            )
+
+        # Slice to selected layers and the key window [0, key_end).
+        attn_weights = attn_probs[_ATTN_LAYERS, :, :, :, :, :key_end]  # [2, B, K, G, T_suf, key_end]
         K = attn_weights.shape[2]
         G = attn_weights.shape[3]
-        # Flatten (K, G) → H = K*G = 8 heads to match the analysis scripts' expected format.
-        attn_weights = attn_weights.reshape(len(_ATTN_LAYERS), batch_size, K * G, suf_len, prefix_len)
-        # Transpose to (B, L, H, T_suf, T_pfx) so batch is dim 0 for uniform unbatching.
-        attn_weights = attn_weights.transpose(1, 0, 2, 3, 4)  # [B, 2, H=8, T_action, T_prefix]
+        # Flatten (K, G) → H = K*G heads.
+        attn_weights = attn_weights.reshape(len(_ATTN_LAYERS), batch_size, K * G, suf_len, key_end)
+        # Transpose to (B, L, H, T_suf, key_end) so batch is dim 0.
+        attn_weights = attn_weights.transpose(1, 0, 2, 3, 4)
 
-        # V vectors from the prefix KV cache filled during the NORMAL inference pass.
-        # kv_cache[1] = v_cache shape [depth, B, T_prefix, K, H_dim].
-        # These are the value vectors the action tokens weighted during attention,
-        # used downstream for value-weighted attention (v_cosine) analysis.
+        # V vectors: prefix positions from the prefix-only KV cache; suffix state token
+        # (when present for non-π0.5) from kv_new which includes the suffix keys as well.
         v_trimmed = kv_cache[1][_ATTN_LAYERS, :, :prefix_len, :, :]  # [2, B, T_pfx, K, H_dim]
-        v_trimmed = v_trimmed.transpose(1, 0, 2, 3, 4)              # [B, 2, T_prefix, K=1, H_dim=256]
+        if has_suffix_state_token:
+            v_state   = kv_new[1][_ATTN_LAYERS, :, prefix_len:prefix_len + 1, :, :]  # [2, B, 1, K, H_dim]
+            v_trimmed = jnp.concatenate([v_trimmed, v_state], axis=2)  # [2, B, key_end, K, H_dim]
+        v_trimmed = v_trimmed.transpose(1, 0, 2, 3, 4)  # [B, L, key_end, K, H_dim]
+
+        # ── Attention mass per modality ────────────────────────────────────────
+        # Mean attention weight directed at each token span, averaged over
+        # batch, layers, heads, and action-query positions.
+        # Returns a JAX 0-d scalar (safe inside JIT).
+        # attn_weights shape: [B, L, H, T_suf, key_end]
+        def _span_mass(span):
+            if span is None:
+                return jnp.zeros(())
+            s0 = min(int(span[0]), key_end)
+            s1 = min(int(span[1]), key_end)
+            if s0 >= s1:
+                return jnp.zeros(())
+            # sum over key-positions in span, then mean over [B, L, H, T_suf]
+            return jnp.mean(jnp.sum(attn_weights[..., s0:s1], axis=-1))
+
+        image_mass = sum(_span_mass(s) for s in spans["image"].values())
+        task_mass  = _span_mass(spans.get("task"))
+        state_mass = _span_mass(spans.get("state"))
+        debug["attention_mass"] = {
+            "image_mass": image_mass,
+            "task_mass":  task_mass,
+            "state_mass": state_mass,
+        }
+        # Warn at trace-time (using only static Python values) if pi05 has no state span.
+        if self.pi05 and "state" not in spans:
+            logger.warning(
+                "π0.5 state_mass will be 0 — no state span was found. "
+                "Ensure discrete_state_input=True in the model config."
+            )
 
         # "layers" is not included here — it is the compile-time constant _ATTN_LAYERS = [1, 16].
         debug["attn"] = {
-            "weights": attn_weights,   # [B, 2, H=8, T_action, T_prefix]
-            "v":       v_trimmed,      # [B, 2, T_prefix, K=1, H_dim=256]
+            "weights": attn_weights,   # [B, L, H, T_suf, key_end]
+            "v":       v_trimmed,      # [B, L, key_end, K, H_dim]
         }
 
         return debug
