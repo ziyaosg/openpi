@@ -21,14 +21,19 @@ class PaligemmaTokenizer:
 
     def tokenize(
         self, prompt: str, state: np.ndarray | None = None
-    ) -> tuple[np.ndarray, np.ndarray, int | None, int | None]:
+    ) -> tuple:
         """Tokenize a prompt (and optional discretized state) into token IDs and a validity mask.
 
-        Returns:
-            tokens: int32 array of shape (max_len,).
-            mask: bool array of shape (max_len,), True for real tokens.
-            task_token_len: number of tokens before the state digits (task-language prefix), or None.
-            state_token_len: number of tokens for the state digit string, or None.
+        Returns (π0 format, state=None):
+            tokens, mask, None, None
+
+        Returns (π0.5 format, state provided):
+            tokens, mask, task_token_len, state_token_len,
+            task_piece_id, task_piece_begin, task_piece_end,
+            state_piece_id, state_piece_begin, state_piece_end
+
+        The piece_begin/end arrays give character offsets within the segment strings
+        "Task: {text}, " and "State: {bins};\n" for visualization filtering.
         """
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
         task_token_len: int | None = None
@@ -51,6 +56,21 @@ class PaligemmaTokenizer:
             effective_len = min(len(tokens), self._max_len)
             state_token_len = max(0, min(len(tokens) - task_token_len - len(suffix_ids),
                                          effective_len - task_token_len))
+
+            # Piece spans for visualization: tokenize task and state segments separately
+            # so the visualization layer can filter "Task: " / ", " and "State: " / ";\n".
+            # BOS has no character position — represent it with zero-width span (0, 0).
+            task_seg   = f"Task: {cleaned_text}, "
+            task_proto = self._tokenizer.encode(task_seg, out_type="immutable_proto")
+            task_piece_id    = np.asarray([self._tokenizer.bos_id()] + [p.id    for p in task_proto.pieces], dtype=np.int32)
+            task_piece_begin = np.asarray([0]                         + [p.begin for p in task_proto.pieces], dtype=np.int32)
+            task_piece_end   = np.asarray([0]                         + [p.end   for p in task_proto.pieces], dtype=np.int32)
+
+            state_seg   = f"State: {state_str};\n"
+            state_proto = self._tokenizer.encode(state_seg, out_type="immutable_proto")
+            state_piece_id    = np.asarray([p.id    for p in state_proto.pieces], dtype=np.int32)
+            state_piece_begin = np.asarray([p.begin for p in state_proto.pieces], dtype=np.int32)
+            state_piece_end   = np.asarray([p.end   for p in state_proto.pieces], dtype=np.int32)
         else:
             # π0 format: state is a continuous suffix token, not embedded in the prompt.
             tokens = self._tokenizer.encode(cleaned_text, add_bos=True) + self._tokenizer.encode("\n")
@@ -69,6 +89,10 @@ class PaligemmaTokenizer:
             tokens = tokens[: self._max_len]
             mask = [True] * self._max_len
 
+        if state is not None:
+            return (np.asarray(tokens), np.asarray(mask), task_token_len, state_token_len,
+                    task_piece_id, task_piece_begin, task_piece_end,
+                    state_piece_id, state_piece_begin, state_piece_end)
         return np.asarray(tokens), np.asarray(mask), task_token_len, state_token_len
 
 

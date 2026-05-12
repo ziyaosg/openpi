@@ -428,10 +428,6 @@ class Pi0(_model.BaseModel):
             debug["gradcam"]["task"] = task_scores
             debug["raw_alpha"]["summation"]["task"] = task_ra
             debug["raw_alpha"]["norm"]["task"]      = task_rn
-            debug["tokens"]["task"] = {
-                "token_ids":  observation.tokenized_prompt,
-                "token_mask": token_mask,
-            }
 
             # For π0.5 with discrete state input, the tokenized_prompt contains both task
             # and state tokens: "Task: ..., State: {bins};\nAction: ".
@@ -439,6 +435,34 @@ class Pi0(_model.BaseModel):
             if observation.task_token_len is not None:
                 task_len = observation.task_token_len
                 state_len = observation.state_token_len
+
+                # Clip token_mask to task+state only (exclude ";\nAction: " suffix tokens
+                # that are also True in tokenized_prompt_mask but not part of either modality).
+                if token_mask is not None:
+                    task_state_len = task_len + state_len
+                    clipped_mask = token_mask.at[:, task_state_len:].set(False)
+                else:
+                    clipped_mask = token_mask
+                debug["tokens"]["task"] = {
+                    "token_ids":  observation.tokenized_prompt,
+                    "token_mask": clipped_mask,
+                }
+                if observation.task_piece_id is not None:
+                    debug["tokens"]["task"]["piece_id"]    = observation.task_piece_id
+                    debug["tokens"]["task"]["piece_begin"] = observation.task_piece_begin
+                    debug["tokens"]["task"]["piece_end"]   = observation.task_piece_end
+                    debug["tokens"]["state"] = {
+                        "piece_id":    observation.state_piece_id,
+                        "piece_begin": observation.state_piece_begin,
+                        "piece_end":   observation.state_piece_end,
+                    }
+            else:
+                debug["tokens"]["task"] = {
+                    "token_ids":  observation.tokenized_prompt,
+                    "token_mask": token_mask,
+                }
+
+            if observation.task_token_len is not None:
                 state_start = task_len  # state tokens begin right after task tokens
                 state_emb   = prefix_tokens[:, t0 + state_start : t0 + state_start + state_len, :]
                 state_grads = grads[:, t0 + state_start : t0 + state_start + state_len, :]

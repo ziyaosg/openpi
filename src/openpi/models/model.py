@@ -112,6 +112,13 @@ class Observation(Generic[ArrayT]):
     # pytree_node=False keeps them as plain Python ints (static) so JAX jit doesn't trace them.
     task_token_len: int | None = struct.field(pytree_node=False, default=None)
     state_token_len: int | None = struct.field(pytree_node=False, default=None)
+    # Per-token character-offset spans for visualization filtering (None when not recorded).
+    task_piece_id:    np.ndarray | None = struct.field(pytree_node=False, default=None)
+    task_piece_begin: np.ndarray | None = struct.field(pytree_node=False, default=None)
+    task_piece_end:   np.ndarray | None = struct.field(pytree_node=False, default=None)
+    state_piece_id:    np.ndarray | None = struct.field(pytree_node=False, default=None)
+    state_piece_begin: np.ndarray | None = struct.field(pytree_node=False, default=None)
+    state_piece_end:   np.ndarray | None = struct.field(pytree_node=False, default=None)
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "Observation[ArrayT]":
@@ -142,6 +149,12 @@ class Observation(Generic[ArrayT]):
             token_loss_mask=data.get("token_loss_mask"),
             task_token_len=_to_python_int(data.get("task_token_len")),
             state_token_len=_to_python_int(data.get("state_token_len")),
+            task_piece_id=data.get("task_piece_id"),
+            task_piece_begin=data.get("task_piece_begin"),
+            task_piece_end=data.get("task_piece_end"),
+            state_piece_id=data.get("state_piece_id"),
+            state_piece_begin=data.get("state_piece_begin"),
+            state_piece_end=data.get("state_piece_end"),
         )
 
     def to_dict(self) -> at.PyTree[ArrayT]:
@@ -223,6 +236,12 @@ def preprocess_observation(
         token_loss_mask=observation.token_loss_mask,
         task_token_len=observation.task_token_len,
         state_token_len=observation.state_token_len,
+        task_piece_id=observation.task_piece_id,
+        task_piece_begin=observation.task_piece_begin,
+        task_piece_end=observation.task_piece_end,
+        state_piece_id=observation.state_piece_id,
+        state_piece_begin=observation.state_piece_begin,
+        state_piece_end=observation.state_piece_end,
     )
 
 

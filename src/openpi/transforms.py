@@ -262,11 +262,15 @@ class TokenizePrompt(DataTransformFn):
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks, task_token_len, state_token_len = self.tokenizer.tokenize(prompt, state)
+        tok_out = self.tokenizer.tokenize(prompt, state)
+        tokens, token_masks, task_token_len, state_token_len = tok_out[:4]
         result = {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
         if task_token_len is not None:
             result["task_token_len"] = task_token_len
             result["state_token_len"] = state_token_len
+        if len(tok_out) > 4:
+            (result["task_piece_id"],    result["task_piece_begin"],  result["task_piece_end"],
+             result["state_piece_id"],   result["state_piece_begin"], result["state_piece_end"]) = tok_out[4:]
         return result
 
 

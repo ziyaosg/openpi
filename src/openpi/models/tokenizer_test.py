@@ -5,7 +5,7 @@ from openpi.models import tokenizer as _tokenizer
 
 def test_tokenize():
     tokenizer = _tokenizer.PaligemmaTokenizer(max_len=10)
-    tokens, masks, task_len, state_len = tokenizer.tokenize("Hello, world!")
+    tokens, masks, task_len, state_len = tokenizer.tokenize("Hello, world!")[:4]
 
     assert tokens.shape == (10,)
     assert masks.shape == (10,)
@@ -16,7 +16,7 @@ def test_tokenize():
 def test_tokenize_with_state():
     tokenizer = _tokenizer.PaligemmaTokenizer(max_len=48)
     state = np.zeros(4, dtype=np.float32)
-    tokens, masks, task_len, state_len = tokenizer.tokenize("pick up the block", state)
+    tokens, masks, task_len, state_len = tokenizer.tokenize("pick up the block", state)[:4]
 
     assert tokens.shape == (48,)
     assert masks.shape == (48,)
@@ -75,7 +75,7 @@ def test_tokenize_with_state_exact_boundary():
     ]
 
     for prompt, state in cases:
-        tokens, masks, task_len, state_len = tokenizer.tokenize(prompt, state)
+        tokens, masks, task_len, state_len = tokenizer.tokenize(prompt, state)[:4]
         ref_task_len, ref_state_len, discretized = _ref_boundaries(sp, prompt, state)
 
         assert task_len == ref_task_len, (
@@ -108,7 +108,7 @@ def test_tokenize_with_state_truncation_clamps_state_len():
     tokenizer = _tokenizer.PaligemmaTokenizer(max_len=30)
 
     state = np.linspace(-1.0, 1.0, 20).astype(np.float32)
-    tokens, masks, task_len, state_len = tokenizer.tokenize("move forward", state)
+    tokens, masks, task_len, state_len = tokenizer.tokenize("move forward", state)[:4]
 
     assert tokens.shape == (30,)
     assert task_len is not None and state_len is not None
@@ -128,7 +128,7 @@ def test_pi05_span_no_overlap():
 
     prompt = "pick up the block"
     state  = np.array([0.1, -0.2, 0.3, -0.4, 0.0, 0.7], dtype=np.float32)
-    _, masks, task_len, state_len = tokenizer.tokenize(prompt, state)
+    _, masks, task_len, state_len = tokenizer.tokenize(prompt, state)[:4]
 
     assert task_len  is not None and task_len  > 0
     assert state_len is not None and state_len > 0
