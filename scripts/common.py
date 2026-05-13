@@ -415,6 +415,78 @@ def _render_piece_heatmap(
     return pil.resize((max(int(pil.width * ratio), 1), target_height_px), Image.BILINEAR)
 
 
+def get_token_labels(
+    record: dict,
+    modality: str,
+    strip_prefix: str = "",
+    strip_suffix: str = "",
+) -> Tuple[List[str], np.ndarray]:
+    """Return (labels, idx) for the content tokens of a modality.
+
+    labels: decoded label per content token (prefix/suffix stripped)
+    idx:    indices into the padded (200-element) score array
+    """
+    piece_id_key = f"outputs/debug/tokens/{modality}/piece_id"
+    if piece_id_key in record:
+        piece_id    = np.asarray(record[piece_id_key])
+        piece_begin = np.asarray(record[f"outputs/debug/tokens/{modality}/piece_begin"])
+        piece_end   = np.asarray(record[f"outputs/debug/tokens/{modality}/piece_end"])
+        sp = _get_sp()
+        decoded = sp.decode(piece_id.tolist())
+        content_start = len(strip_prefix)
+        content_end   = len(decoded) - len(strip_suffix) if strip_suffix else len(decoded)
+        labels: List[str] = []
+        indices: List[int] = []
+        for i, (b, e) in enumerate(zip(piece_begin.tolist(), piece_end.tolist())):
+            if int(e) > content_start and int(b) < content_end:
+                labels.append(decoded[max(int(b), content_start):min(int(e), content_end)])
+                indices.append(i)
+        return labels, np.array(indices, dtype=np.int64)
+
+    # Fallback: use token_ids / token_mask
+    token_key = f"outputs/debug/tokens/{modality}/token_ids"
+    mask_key  = f"outputs/debug/tokens/{modality}/token_mask"
+    if token_key in record:
+        token_ids  = np.asarray(record[token_key])
+        token_mask = np.asarray(record[mask_key])
+    else:
+        token_ids  = np.asarray(record["outputs/debug/tokens/task/token_ids"])
+        token_mask = np.asarray(record["outputs/debug/tokens/task/token_mask"])
+    sp = _get_sp()
+    mask = token_mask.astype(bool)
+    real_ids = token_ids[mask].tolist()
+    labels = [sp.id_to_piece(tid).replace("▁", " ").strip() for tid in real_ids]
+    return labels, np.where(mask)[0]
+
+
+def render_token_strip_as_image(
+    scores: np.ndarray,
+    labels: List[str],
+    height: int,
+    tile_w: int,
+    font,
+    bg: Tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    """Render a row of colored tiles, one per token, with the label text overlaid."""
+    from PIL import ImageDraw
+    n = len(labels)
+    if n == 0:
+        return Image.new("RGB", (tile_w, height), bg)
+    img  = Image.new("RGB", (n * tile_w, height), bg)
+    draw = ImageDraw.Draw(img)
+    for i, (lbl, score) in enumerate(zip(labels, scores)):
+        x0 = i * tile_w
+        r, g, b, _ = jet_color(float(score))
+        fill = (int(r * 255), int(g * 255), int(b * 255))
+        draw.rectangle([x0, 0, x0 + tile_w - 1, height - 1], fill=fill)
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        text_color = (0, 0, 0) if lum > 0.45 else (255, 255, 255)
+        bbox = draw.textbbox((0, 0), lbl, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text((x0 + (tile_w - tw) // 2, (height - th) // 2), lbl, fill=text_color, font=font)
+    return img
+
+
 def make_task_text_panel(
     record: dict,
     task_scores: np.ndarray,        # raw scores per task-token position (200,)

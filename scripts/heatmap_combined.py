@@ -12,6 +12,7 @@ Layout (5 data rows × 3 columns):
 from __future__ import annotations
 
 import glob
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Tuple
 
@@ -25,14 +26,16 @@ from .common import (
     as_u8_rgb, resize_heatmap, overlay_heatmap,
     normalize_joint_minmax, clip_gamma_normalize_joint, log_clip_gamma_normalize_joint,
     get_attn_hs, get_v_skd, get_span, get_all_spans, select_heads,
-    score_v_cosine, make_task_text_panel, make_state_text_panel,
+    score_v_cosine, get_token_labels, render_token_strip_as_image,
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_180436")
-OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_180436/heatmap_combined")
+INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_182606")
+OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_182606/heatmap_combined")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
+
+MAX_EPISODES_PER_TASK = 10   # set to None for unlimited
 
 ACTION_TOKEN    = 0
 VARIANT         = "summation"
@@ -52,7 +55,9 @@ IMG_DISPLAY = 420
 
 SMOOTHING = "BILINEAR"
 
-STATE_TILE_W = 42
+TASK_TILE_W     = 110
+STATE_TILE_W    = 42
+TOKEN_FONT_SIZE = 38
 
 ROW_LABELS = ["Original", "GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
 COL_LABELS = ["Base Camera", "Left Wrist", "Task Tokens", "State Tokens"]
@@ -74,7 +79,8 @@ def _load_font(size: int) -> ImageFont.ImageFont:
         return ImageFont.load_default()
 
 
-_FONT = _load_font(FONT_SIZE)
+_FONT       = _load_font(FONT_SIZE)
+_TOKEN_FONT = _load_font(TOKEN_FONT_SIZE)
 
 
 def _draw_centered(draw: ImageDraw.ImageDraw, text: str,
@@ -88,6 +94,15 @@ def _draw_centered(draw: ImageDraw.ImageDraw, text: str,
 
 # ─── Normalization ────────────────────────────────────────────────────────────
 
+def _clip_normalize_1d(scores: np.ndarray) -> np.ndarray:
+    a = np.abs(scores).astype(np.float32)
+    if a.size == 0:
+        return a
+    clip_val = float(np.percentile(a, CLIP_PERCENTILE)) if a.size > 1 else float(a.max())
+    scale    = clip_val if clip_val > 0 else 1.0
+    return (np.clip(a / scale, 0.0, 1.0) ** GAMMA)
+
+
 def _normalize_cosine_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
     flat = np.concatenate([h.reshape(-1) for h in heats])
     mn, mx = float(flat.min()), float(flat.max())
@@ -100,6 +115,10 @@ def _normalize_cosine_joint(heats: List[np.ndarray]) -> List[np.ndarray]:
 def process_one(npy_path: str, out_png: str) -> None:
     rec   = load_record(npy_path)
     row_h = IMG_DISPLAY
+
+    # Token labels and content indices for task and state modalities
+    task_labels,  task_idx  = get_token_labels(rec, "task",  strip_prefix="Task: ",  strip_suffix=", ")
+    state_labels, state_idx = get_token_labels(rec, "state", strip_prefix="State: ", strip_suffix=";\n")
 
     # Camera images upscaled to IMG_DISPLAY × IMG_DISPLAY (base + left wrist only)
     imgs = [
@@ -189,16 +208,31 @@ def process_one(npy_path: str, out_png: str) -> None:
     else:
         state_scores_per_method = [np.zeros(1, dtype=np.float32)] * 4
 
-    # ── Task text panels (rows 1–4) ───────────────────────────────────────────
-    n_task_tok  = (task_span[1] - task_span[0]) if task_span else None
-    task_panels = [make_task_text_panel(rec, ts, row_h, n_task_tokens=n_task_tok)
-                   for ts in task_scores_per_method]
-    task_col_w  = max(p.width for p in task_panels)
+    # ── Task token strips (rows 1–4) ─────────────────────────────────────────
+    task_n = min(len(ts) for ts in task_scores_per_method)
+    _valid_task = task_idx < task_n
+    task_idx_v    = task_idx[_valid_task]
+    task_labels_v = [task_labels[j] for j, ok in enumerate(_valid_task) if ok]
+    task_col_w    = len(task_labels_v) * TASK_TILE_W
+    task_strips = [
+        render_token_strip_as_image(
+            _clip_normalize_1d(ts[task_idx_v]), task_labels_v, row_h, TASK_TILE_W, _TOKEN_FONT, bg=BG
+        )
+        for ts in task_scores_per_method
+    ]
 
-    # ── State token panels (rows 1–4) ─────────────────────────────────────────
-    state_panels = [make_state_text_panel(rec, ss, n_task_tok or 0, row_h, tile_w=STATE_TILE_W)
-                    for ss in state_scores_per_method]
-    state_col_w  = max(p.width for p in state_panels)
+    # ── State token strips (rows 1–4) ────────────────────────────────────────
+    state_n = min(len(ss) for ss in state_scores_per_method)
+    _valid_state = state_idx < state_n
+    state_idx_v    = state_idx[_valid_state]
+    state_labels_v = [state_labels[j] for j, ok in enumerate(_valid_state) if ok]
+    state_col_w    = len(state_labels_v) * STATE_TILE_W
+    state_strips = [
+        render_token_strip_as_image(
+            _clip_normalize_1d(ss[state_idx_v]), state_labels_v, row_h, STATE_TILE_W, _TOKEN_FONT, bg=BG
+        )
+        for ss in state_scores_per_method
+    ]
 
     # ── Overlay images per method ─────────────────────────────────────────────
     def _overlays(heats01: List[np.ndarray]) -> List[np.ndarray]:
@@ -234,10 +268,8 @@ def process_one(npy_path: str, out_png: str) -> None:
         for c, arr in enumerate(cells):
             canvas.paste(Image.fromarray(arr, "RGB"), (x_cams[c], y0))
         if r > 0:
-            panel = task_panels[r - 1]
-            canvas.paste(panel, (x_task, y0 + (row_h - panel.height) // 2))
-            sp = state_panels[r - 1]
-            canvas.paste(sp, (x_state, y0 + (row_h - sp.height) // 2))
+            canvas.paste(task_strips[r - 1],  (x_task,  y0))
+            canvas.paste(state_strips[r - 1], (x_state, y0))
 
     Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_png)
@@ -252,10 +284,36 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No step_*.npy in {INPUT_DIR}")
 
+    # Pre-scan existing episode dirs so subsequent runs pick up from where they left off.
+    allowed_episodes: dict = defaultdict(set)
+    if OUTPUT_DIR.exists():
+        for task_dir in OUTPUT_DIR.iterdir():
+            if not task_dir.is_dir() or not task_dir.name.startswith("t"):
+                continue
+            try:
+                task_id = int(task_dir.name.split("_")[0][1:])
+            except (ValueError, IndexError):
+                continue
+            for ep_dir in task_dir.iterdir():
+                if ep_dir.is_dir() and ep_dir.name.startswith("ep"):
+                    try:
+                        ep_num = int(ep_dir.name.split("_")[0][2:])
+                        allowed_episodes[task_id].add(ep_num)
+                    except (ValueError, IndexError):
+                        pass
+
     skipped = 0
     for f in files:
         s  = step_index(f)
         ep = episode_for_step(s, episodes)
+
+        if MAX_EPISODES_PER_TASK is not None:
+            if ep.episode_num not in allowed_episodes[ep.task_id]:
+                if len(allowed_episodes[ep.task_id]) >= MAX_EPISODES_PER_TASK:
+                    skipped += 1
+                    continue
+                allowed_episodes[ep.task_id].add(ep.episode_num)
+
         out = str(
             OUTPUT_DIR
             / f"t{ep.task_id}_{slugify(ep.task)}"
