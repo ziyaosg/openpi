@@ -467,24 +467,45 @@ def render_token_strip_as_image(
     font,
     bg: Tuple[int, int, int] = (255, 255, 255),
 ) -> Image.Image:
-    """Render a row of colored tiles, one per token, with the label text overlaid."""
+    """Render a row of colored tiles, one per token, with label text rotated 90° CCW."""
     from PIL import ImageDraw
     n = len(labels)
     if n == 0:
         return Image.new("RGB", (tile_w, height), bg)
-    img  = Image.new("RGB", (n * tile_w, height), bg)
+    img  = Image.new("RGBA", (n * tile_w, height), (*bg, 255))
     draw = ImageDraw.Draw(img)
     for i, (lbl, score) in enumerate(zip(labels, scores)):
         x0 = i * tile_w
+        x1 = (i + 1) * tile_w - 1
         r, g, b, _ = jet_color(float(score))
-        fill = (int(r * 255), int(g * 255), int(b * 255))
-        draw.rectangle([x0, 0, x0 + tile_w - 1, height - 1], fill=fill)
-        lum = 0.299 * r + 0.587 * g + 0.114 * b
-        text_color = (0, 0, 0) if lum > 0.45 else (255, 255, 255)
-        bbox = draw.textbbox((0, 0), lbl, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text((x0 + (tile_w - tw) // 2, (height - th) // 2), lbl, fill=text_color, font=font)
-    return img
+        fill_rgb = (int(r * 255), int(g * 255), int(b * 255))
+        draw.rectangle([x0, 0, x1, height - 1], fill=(*fill_rgb, 255))
+
+        if not lbl:
+            continue
+
+        # Truncate so rotated label height (= text width) fits in strip height.
+        display = lbl
+        bbox    = draw.textbbox((0, 0), display, font=font)
+        tw, th  = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        while len(display) > 1 and tw > height - 4:
+            display = display[:-1]
+            bbox    = draw.textbbox((0, 0), display, font=font)
+            tw, th  = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+        lum        = 0.299 * r + 0.587 * g + 0.114 * b
+        text_color = (0, 0, 0, 255) if lum > 0.45 else (255, 255, 255, 255)
+
+        # Render on transparent layer, rotate 90° CCW, alpha-composite into tile.
+        text_layer = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+        ImageDraw.Draw(text_layer).text((-bbox[0], -bbox[1]), display, fill=text_color, font=font)
+        rotated = text_layer.rotate(90, expand=True)  # size becomes (th, tw)
+
+        rx = x0 + max((tile_w - rotated.width)  // 2, 0)
+        ry =      max((height  - rotated.height) // 2, 0)
+        img.alpha_composite(rotated, (rx, ry))
+
+    return img.convert("RGB")
 
 
 def make_task_text_panel(

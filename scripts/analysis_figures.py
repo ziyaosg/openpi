@@ -41,8 +41,8 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/data/ziyao/policy_records_pi05_libero_20260512_182606")
-OUTPUT_DIR   = Path("/data/ziyao/visualization_pi05_libero_20260512_182606/analysis")
+INPUT_DIR    = Path("/home/ziyao/Documents/policy_records_pi05_libero_20260512_182606")
+OUTPUT_DIR   = Path("/home/ziyao/Documents/visualization_pi05_libero_20260512_182606/analysis")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 MAX_STEPS = 60   # cap per episode to keep runtime manageable
