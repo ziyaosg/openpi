@@ -65,18 +65,36 @@ def _chars_and_norm(
     segment (e.g. "Task: " / ", ") to exclude from both visualization and
     normalization so that punctuation doesn't affect the color scale.
 
+    token_scores may cover ALL pieces (len == len(begin)) or only the content
+    (digit) pieces (len < len(begin)).  When digit-only, an offset k is computed
+    from the strip_prefix length so that score[i - k] is used for content piece i.
+
     Scores are abs-valued then normalized to [0,1] within the content region.
     """
     decoded = sp.decode(piece_ids)
     content_start = len(strip_prefix)
     content_end   = len(decoded) - len(strip_suffix) if strip_suffix else len(decoded)
 
+    n_pieces = len(begin)
+    n_scores = len(token_scores)
+
+    # Determine piece offset k: if scores are digit-only, index as score[i - k].
+    # k = number of prefix-only pieces (entirely before content_start).
+    if n_scores < n_pieces:
+        k = int(np.sum(np.asarray(end) <= content_start))
+    else:
+        k = 0  # scores cover all pieces; use i directly
+
     chars, scores = [], []
     for i, (b, e) in enumerate(zip(begin, end)):
         for j in range(int(b), int(e)):
             if content_start <= j < content_end:
                 chars.append(decoded[j])
-                scores.append(float(token_scores[i]))
+                idx = i - k
+                if 0 <= idx < n_scores:
+                    scores.append(float(token_scores[idx]))
+                else:
+                    scores.append(0.0)
     values = np.abs(np.array(scores, dtype=np.float32))
     maxv   = float(values.max()) if values.size > 0 else 0.0
     norm   = values / maxv if maxv > 0 else np.zeros_like(values)
@@ -157,7 +175,11 @@ def get_token_labels(
     Returns
     -------
     labels  : one string per content token (empty string for whitespace tokens)
-    indices : original 0-based token indices, used to slice the score array
+    indices : original 0-based token indices into the FULL piece array.
+              When the score array covers ALL tokens (len == n_pieces), use
+              score[indices[j]] directly.  When the score array is digit-only
+              (len < n_pieces), use score[indices[j] - k] where k is the number
+              of prefix-only pieces — equivalently, k = indices[0].
     """
     piece_ids   = rec[f"outputs/debug/tokens/{modality}/piece_id"]
     piece_begin = rec[f"outputs/debug/tokens/{modality}/piece_begin"]

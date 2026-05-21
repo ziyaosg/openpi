@@ -1,31 +1,35 @@
 from __future__ import annotations
 
 GRADCAM_KEYS: dict[str, str] = {
-    "base":       "outputs/debug/gradcam/image/base_0_rgb",
-    "left_wrist": "outputs/debug/gradcam/image/left_wrist_0_rgb",
-    "task":       "outputs/debug/gradcam/task",
-    "state":      "outputs/debug/gradcam/state",
+    "base":        "outputs/debug/gradcam/image/base_0_rgb",
+    "left_wrist":  "outputs/debug/gradcam/image/left_wrist_0_rgb",
+    "right_wrist": "outputs/debug/gradcam/image/right_wrist_0_rgb",
+    "task":        "outputs/debug/gradcam/task",
+    "state":       "outputs/debug/gradcam/state",
 }
 
 RAW_ALPHA_KEYS: dict[str, str] = {
-    "base":       "outputs/debug/raw_alpha/summation/image/base_0_rgb",
-    "left_wrist": "outputs/debug/raw_alpha/summation/image/left_wrist_0_rgb",
-    "task":       "outputs/debug/raw_alpha/summation/task",
-    "state":      "outputs/debug/raw_alpha/summation/state",
+    "base":        "outputs/debug/raw_alpha/summation/image/base_0_rgb",
+    "left_wrist":  "outputs/debug/raw_alpha/summation/image/left_wrist_0_rgb",
+    "right_wrist": "outputs/debug/raw_alpha/summation/image/right_wrist_0_rgb",
+    "task":        "outputs/debug/raw_alpha/summation/task",
+    "state":       "outputs/debug/raw_alpha/summation/state",
 }
 
 RAW_ALPHA_NORM_KEYS: dict[str, str] = {
-    "base":       "outputs/debug/raw_alpha/norm/image/base_0_rgb",
-    "left_wrist": "outputs/debug/raw_alpha/norm/image/left_wrist_0_rgb",
-    "task":       "outputs/debug/raw_alpha/norm/task",
-    "state":      "outputs/debug/raw_alpha/norm/state",
+    "base":        "outputs/debug/raw_alpha/norm/image/base_0_rgb",
+    "left_wrist":  "outputs/debug/raw_alpha/norm/image/left_wrist_0_rgb",
+    "right_wrist": "outputs/debug/raw_alpha/norm/image/right_wrist_0_rgb",
+    "task":        "outputs/debug/raw_alpha/norm/task",
+    "state":       "outputs/debug/raw_alpha/norm/state",
 }
 
 ATTN_KEYS: dict[str, str] = {
-    "base":       "outputs/debug/spans/image/base_0_rgb",
-    "left_wrist": "outputs/debug/spans/image/left_wrist_0_rgb",
-    "task":       "outputs/debug/spans/task",
-    "state":      "outputs/debug/spans/state",
+    "base":        "outputs/debug/spans/image/base_0_rgb",
+    "left_wrist":  "outputs/debug/spans/image/left_wrist_0_rgb",
+    "right_wrist": "outputs/debug/spans/image/right_wrist_0_rgb",
+    "task":        "outputs/debug/spans/task",
+    "state":       "outputs/debug/spans/state",
 }
 
 

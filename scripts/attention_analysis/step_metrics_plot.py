@@ -44,17 +44,20 @@ from scripts.attention_utils.keys import CAM_NAMES, IMAGE_PATCH_GRID
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR     = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629")
+DATA_DIR     = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260516_034939")
 EPISODE_JSON = DATA_DIR / "client_output" / "episode_summaries.json"
-OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260511_040629/analysis")
+OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260516_034939/analysis")
 
-FILTER_MIXED_TASKS = True   # only tasks with both success and failure episodes
+FILTER_MIXED_TASKS = False   # only tasks with both success and failure episodes
 ACTION_TOKEN = 0            # which action token index to use for gradcam/raw_alpha
 MAX_STEPS = 60
 
 PATCH_H, PATCH_W = IMAGE_PATCH_GRID
 CAM_BASE   = "base_0_rgb"
-CAM_WRISTS = [c for c in CAM_NAMES if c != CAM_BASE]
+CAM_LWRIST = "left_wrist_0_rgb"
+# right_wrist_0_rgb is NOT a real camera for single-arm libero tasks: the model
+# receives the same wrist_image in both wrist slots (cosine ≈ 0.905 confirmed).
+# All right-wrist features are noise on a repeated signal — excluded intentionally.
 
 FULL_ATTN_KEY = "outputs/debug/attn/weights"
 FULL_V_KEY    = "outputs/debug/attn/v"
@@ -96,6 +99,28 @@ def _span(rec: dict, key: str) -> Optional[Tuple[int, int]]:
     if key not in rec:
         return None
     return tuple(int(x) for x in np.asarray(rec[key]).tolist())
+
+
+def _state_digit_slice(rec: dict) -> Tuple[int, Optional[int]]:
+    """(k, end): score_array[k:end] covers only state digit tokens.
+
+    The state score arrays span "State: {digits};\\n" including syntactic
+    prefix ("State", ":") and suffix (";", "\\n") tokens that receive high
+    model attention as structural markers but carry no per-joint information.
+    Returns (0, None) when piece metadata is absent (use full array).
+    """
+    pb = rec.get("outputs/debug/tokens/state/piece_begin")
+    pe = rec.get("outputs/debug/tokens/state/piece_end")
+    if pb is None or pe is None:
+        return 0, None
+    piece_begin = np.asarray(pb)
+    piece_end   = np.asarray(pe)
+    max_byte      = int(piece_end.max())
+    CONTENT_START = 7            # len("State: ")
+    CONTENT_END   = max_byte - 2  # excl. ";\n"
+    k = int((piece_end   <= CONTENT_START).sum())
+    s = int((piece_begin >= CONTENT_END).sum())
+    return k, len(piece_begin) - s
 
 
 def _gini(v: np.ndarray) -> float:
@@ -220,24 +245,23 @@ def extract(rec: dict) -> dict:
     state     = np.asarray(rec["outputs/state"])    # (8,)
 
     sp_base   = _span(rec, f"outputs/debug/spans/image/{CAM_BASE}")
-    sp_wrists = [s for s in (_span(rec, f"outputs/debug/spans/image/{c}") for c in CAM_WRISTS)
-                 if s is not None]
+    sp_lwrist = _span(rec, f"outputs/debug/spans/image/{CAM_LWRIST}")
     sp_task   = _span(rec, "outputs/debug/spans/task")
     sp_state  = _span(rec, "outputs/debug/spans/state")
+    # sp_rwrist deliberately excluded: right_wrist slot = repeated wrist_image, not real camera
 
     tgt_idx  = _layer_indices(rec)
     attn_tgt = full_attn[tgt_idx, 0]  # (H, S)
     v_tgt    = full_v[tgt_idx, 0]     # (S, K, D)
 
     # ── Per-modality one-vs-rest head selection at TARGET_LAYER ───────────────
-    all_spans: List[Tuple[int, int]] = [sp_base] + sp_wrists
-    if sp_task:  all_spans.append(sp_task)
-    if sp_state: all_spans.append(sp_state)
+    all_spans: List[Tuple[int, int]] = [s for s in
+        [sp_base, sp_lwrist, sp_task, sp_state] if s is not None]
 
-    base_heads  = select_heads_for_span(attn_tgt, sp_base,       all_spans, TOP_K_HEADS)
-    task_heads  = select_heads_for_span(attn_tgt, sp_task,       all_spans, TOP_K_HEADS) if sp_task  else None
-    state_heads = select_heads_for_span(attn_tgt, sp_state,      all_spans, TOP_K_HEADS) if sp_state else None
-    wrist_heads = select_heads_for_span(attn_tgt, sp_wrists[0],  all_spans, TOP_K_HEADS) if sp_wrists else None
+    base_heads   = select_heads_for_span(attn_tgt, sp_base,   all_spans, TOP_K_HEADS)
+    lwrist_heads = select_heads_for_span(attn_tgt, sp_lwrist, all_spans, TOP_K_HEADS) if sp_lwrist else None
+    task_heads   = select_heads_for_span(attn_tgt, sp_task,   all_spans, TOP_K_HEADS) if sp_task   else None
+    state_heads  = select_heads_for_span(attn_tgt, sp_state,  all_spans, TOP_K_HEADS) if sp_state  else None
 
     # ── Attention concentration (base cam, mean over all heads) ───────────────
     base_attn = attn_tgt[:, sp_base[0]:sp_base[1]].mean(axis=0)  # (N_patches,)
@@ -248,10 +272,10 @@ def extract(rec: dict) -> dict:
     # ── Attention modality fractions ──────────────────────────────────────────
     def _frac(sp):
         return float(attn_tgt[:, sp[0]:sp[1]].sum(axis=1).mean()) if sp else 0.0
-    base_frac  = _frac(sp_base)
-    wrist_frac = sum(_frac(s) for s in sp_wrists)
-    task_frac  = _frac(sp_task)
-    state_frac = _frac(sp_state)
+    base_frac   = _frac(sp_base)
+    lwrist_frac = _frac(sp_lwrist)
+    task_frac   = _frac(sp_task)
+    state_frac  = _frac(sp_state)
 
     # ── Task-token inter-head agreement (task-focused heads) ──────────────────
     if sp_task and task_heads is not None and len(task_heads) > 1:
@@ -270,35 +294,39 @@ def extract(rec: dict) -> dict:
     rot_flip   = float(flips[:, 3:6].mean())   # rotation dims 3-5
     grip_flip  = float(flips[:, 6].mean())     # gripper dim 6
 
-    # ── Attribution agreement — base cam (base-focused heads for rw/vc) ───────
-    gc_h = np.abs(to_2d_heatmap(
-        np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
-    ra_h = np.abs(to_2d_heatmap(
-        np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
-    rw_h = attn_tgt[base_heads, sp_base[0]:sp_base[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
-    vc_h = score_v_cosine(attn_tgt, v_tgt, base_heads)[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
-    base_agr = _cam_agreement([gc_h, ra_h, rw_h, vc_h])
-
-    # ── Attribution agreement — wrist cam (wrist-focused heads for rw/vc) ─────
+    # ── Shared nan placeholders ───────────────────────────────────────────────
     _nan_metrics = {"cosine": float("nan"), "iou": float("nan"), "com_dist": float("nan"), "emd": float("nan")}
     _nan4  = {pname: _nan_metrics for pname in PAIR_NAMES}
     _nan_g = (float("nan"),) * 4
-    if sp_wrists and wrist_heads is not None:
-        sp_w, cam_w = sp_wrists[0], CAM_WRISTS[0]
-        gc_hw = np.abs(to_2d_heatmap(
-            np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{cam_w}"]), cam_w))
-        ra_hw = np.abs(to_2d_heatmap(
-            np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{cam_w}"]), cam_w))
-        rw_hw = attn_tgt[wrist_heads, sp_w[0]:sp_w[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
-        vc_hw = score_v_cosine(attn_tgt, v_tgt, wrist_heads)[sp_w[0]:sp_w[1]].reshape(PATCH_H, PATCH_W)
-        wrist_agr  = _cam_agreement([gc_hw, ra_hw, rw_hw, vc_hw])
-        wrist_gini = (_gini(gc_hw.ravel()), _gini(ra_hw.ravel()),
-                      _gini(rw_hw.ravel()), _gini(vc_hw.ravel()))
-    else:
-        wrist_agr  = _nan4
-        wrist_gini = _nan_g
 
-    # ── Attribution agreement — task tokens (task-focused heads for rw/vc) ────
+    # ── Attribution agreement — base cam ──────────────────────────────────────
+    gc_base = np.abs(to_2d_heatmap(
+        np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
+    ra_base = np.abs(to_2d_heatmap(
+        np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{CAM_BASE}"]), CAM_BASE))
+    rw_base = attn_tgt[base_heads, sp_base[0]:sp_base[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
+    vc_base = score_v_cosine(attn_tgt, v_tgt, base_heads)[sp_base[0]:sp_base[1]].reshape(PATCH_H, PATCH_W)
+    base_agr = _cam_agreement([gc_base, ra_base, rw_base, vc_base])
+    base_gini = (_gini(gc_base.ravel()), _gini(ra_base.ravel()),
+                 _gini(rw_base.ravel()), _gini(vc_base.ravel()))
+
+    # ── Attribution agreement — left wrist cam ────────────────────────────────
+    gc_lwrist = ra_lwrist = rw_lwrist = vc_lwrist = None
+    if sp_lwrist and lwrist_heads is not None:
+        gc_lwrist = np.abs(to_2d_heatmap(
+            np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/{CAM_LWRIST}"]), CAM_LWRIST))
+        ra_lwrist = np.abs(to_2d_heatmap(
+            np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/{CAM_LWRIST}"]), CAM_LWRIST))
+        rw_lwrist = attn_tgt[lwrist_heads, sp_lwrist[0]:sp_lwrist[1]].max(axis=0).reshape(PATCH_H, PATCH_W)
+        vc_lwrist = score_v_cosine(attn_tgt, v_tgt, lwrist_heads)[sp_lwrist[0]:sp_lwrist[1]].reshape(PATCH_H, PATCH_W)
+        lwrist_agr  = _cam_agreement([gc_lwrist, ra_lwrist, rw_lwrist, vc_lwrist])
+        lwrist_gini = (_gini(gc_lwrist.ravel()), _gini(ra_lwrist.ravel()),
+                       _gini(rw_lwrist.ravel()), _gini(vc_lwrist.ravel()))
+    else:
+        lwrist_agr  = _nan4
+        lwrist_gini = _nan_g
+
+    # ── Attribution agreement — task tokens ───────────────────────────────────
     if sp_task and task_heads is not None:
         gc_task = np.abs(np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/task"])[0])
         ra_task = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/task"])[0])
@@ -310,12 +338,19 @@ def extract(rec: dict) -> dict:
         task_agr  = _nan4
         task_gini = _nan_g
 
-    # ── Attribution agreement — state tokens (state-focused heads for rw/vc) ──
+    # ── Attribution agreement — state tokens (digit-only) ────────────────────
+    # Score arrays cover the full "State: {digits};\n" segment; slice to digits
+    # only to avoid inflating Gini with high-attention syntactic prefix/suffix.
     if sp_state and state_heads is not None:
-        gc_state = np.abs(np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/state"])[0])
-        ra_state = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/state"])[0])
-        rw_state = attn_tgt[state_heads, sp_state[0]:sp_state[1]].max(axis=0)
-        vc_state = score_v_cosine(attn_tgt, v_tgt, state_heads)[sp_state[0]:sp_state[1]]
+        dk, dend = _state_digit_slice(rec)
+        gc_state_full = np.abs(np.asarray(rec[f"outputs/debug/gradcam/action_tokens/{ACTION_TOKEN}/state"])[0])
+        ra_state_full = np.abs(np.asarray(rec[f"outputs/debug/raw_alpha/summation/action_tokens/{ACTION_TOKEN}/state"])[0])
+        rw_state_full = attn_tgt[state_heads, sp_state[0]:sp_state[1]].max(axis=0)
+        vc_state_full = score_v_cosine(attn_tgt, v_tgt, state_heads)[sp_state[0]:sp_state[1]]
+        gc_state = gc_state_full[dk:dend]
+        ra_state = ra_state_full[dk:dend]
+        rw_state = rw_state_full[dk:dend]
+        vc_state = vc_state_full[dk:dend]
         state_agr  = _tok_agreement([gc_state, ra_state, rw_state, vc_state])
         state_gini = (_gini(gc_state), _gini(ra_state), _gini(rw_state), _gini(vc_state))
     else:
@@ -324,15 +359,15 @@ def extract(rec: dict) -> dict:
 
     return {
         # Gini — base cam
-        "gini_base_gc":      _gini(gc_h.ravel()),
-        "gini_base_ra":      _gini(ra_h.ravel()),
-        "gini_base_rw":      _gini(rw_h.ravel()),
-        "gini_base_vc":      _gini(vc_h.ravel()),
-        # Gini — wrist cam
-        "gini_wrist_gc":     wrist_gini[0],
-        "gini_wrist_ra":     wrist_gini[1],
-        "gini_wrist_rw":     wrist_gini[2],
-        "gini_wrist_vc":     wrist_gini[3],
+        "gini_base_gc":      base_gini[0],
+        "gini_base_ra":      base_gini[1],
+        "gini_base_rw":      base_gini[2],
+        "gini_base_vc":      base_gini[3],
+        # Gini — left wrist cam (the only real wrist camera for single-arm tasks)
+        "gini_lwrist_gc":    lwrist_gini[0],
+        "gini_lwrist_ra":    lwrist_gini[1],
+        "gini_lwrist_rw":    lwrist_gini[2],
+        "gini_lwrist_vc":    lwrist_gini[3],
         # Gini — task tokens
         "gini_task_gc":      task_gini[0],
         "gini_task_ra":      task_gini[1],
@@ -345,7 +380,7 @@ def extract(rec: dict) -> dict:
         "gini_state_vc":     state_gini[3],
         # modality fractions
         "base_frac":         base_frac,
-        "wrist_frac":        wrist_frac,
+        "lwrist_frac":       lwrist_frac,
         "task_frac":         task_frac,
         "state_frac":        state_frac,
         # inter-head agreement
@@ -355,10 +390,10 @@ def extract(rec: dict) -> dict:
         "rot_flip":          rot_flip,
         "grip_flip":         grip_flip,
         # attribution agreement — per pair, per modality
-        **{f"base_{pname}_{m}":  base_agr[pname][m]  for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
-        **{f"wrist_{pname}_{m}": wrist_agr[pname][m] for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
-        **{f"task_{pname}_{m}":  task_agr[pname][m]  for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
-        **{f"state_{pname}_{m}": state_agr[pname][m] for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"base_{pname}_{m}":   base_agr[pname][m]   for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"lwrist_{pname}_{m}": lwrist_agr[pname][m] for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"task_{pname}_{m}":   task_agr[pname][m]   for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
+        **{f"state_{pname}_{m}":  state_agr[pname][m]  for pname in PAIR_NAMES for m in ("cosine", "iou", "com_dist", "emd")},
         "_state":            state,
         "_action0":          actions[0].copy(),
     }
@@ -426,17 +461,17 @@ def _plot_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
         ("success", COL_S_MEAN, COL_S_IND),
         ("failure", COL_F_MEAN, COL_F_IND),
     ]:
-        eps = ep_data.get(label, [])
+        eps = [e for e in ep_data.get(label, []) if e]
         if not eps:
             continue
         arr = _to_matrix(eps, key)
         xs  = np.arange(arr.shape[1])
         for row in arr:
             valid = ~np.isnan(row)
-            ax.plot(xs[valid], row[valid], color=ci, lw=LW_IND, alpha=ALPHA_IND)
+            ax.plot(xs[valid], row[valid], color=ci, lw=LW_IND, alpha=ALPHA_IND, zorder=2)
         mean  = np.nanmean(arr, axis=0)
         valid = ~np.isnan(mean)
-        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label)
+        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label, zorder=3)
 
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", pad=3)
@@ -447,14 +482,14 @@ def _plot_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
 def _plot_variance_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
     """Plot per-step inter-episode variance of a metric for each outcome group."""
     for label, cm in [("success", COL_S_MEAN), ("failure", COL_F_MEAN)]:
-        eps = ep_data.get(label, [])
+        eps = [e for e in ep_data.get(label, []) if e]
         if not eps:
             continue
         arr = _to_matrix(eps, key)
         xs  = np.arange(arr.shape[1])
         var  = np.nanvar(arr, axis=0)
         valid = ~np.isnan(var)
-        ax.plot(xs[valid], var[valid], color=cm, lw=LW_MEAN, label=label)
+        ax.plot(xs[valid], var[valid], color=cm, lw=LW_MEAN, label=label, zorder=3)
 
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", pad=3)
@@ -498,18 +533,18 @@ def _gini_fig(ep_data: EpData, modality: str, label: str, fname: str):
 
 
 def fig1_attention_concentration(ep_data: EpData):
-    _gini_fig(ep_data, "base",  "Base Camera",        "fig1a_gini_base.png")
-    _gini_fig(ep_data, "wrist", "Left Wrist Camera",  "fig1b_gini_wrist.png")
-    _gini_fig(ep_data, "task",  "Task Tokens",         "fig1c_gini_task.png")
-    _gini_fig(ep_data, "state", "State Tokens",        "fig1d_gini_state.png")
+    _gini_fig(ep_data, "base",   "Base Camera",       "fig1a_gini_base.png")
+    _gini_fig(ep_data, "lwrist", "Left Wrist Camera", "fig1b_gini_lwrist.png")
+    _gini_fig(ep_data, "task",   "Task Tokens",       "fig1c_gini_task.png")
+    _gini_fig(ep_data, "state",  "State Tokens",      "fig1d_gini_state.png")
 
 
 def fig2_attention_routing(ep_data: EpData):
     specs = [
-        ("base_frac",  "Attn fraction", "Base camera attention fraction"),
-        ("wrist_frac", "Attn fraction", "Left wrist camera attention fraction"),
-        ("task_frac",  "Attn fraction", "Task token attention fraction"),
-        ("state_frac", "Attn fraction", "State token attention fraction"),
+        ("base_frac",   "Attn fraction", "Base camera attention fraction"),
+        ("lwrist_frac", "Attn fraction", "Wrist camera attention fraction"),
+        ("task_frac",   "Attn fraction", "Task token attention fraction"),
+        ("state_frac",  "Attn fraction", "State token attention fraction"),
     ]
     fig, axes = _make_fig(len(specs), "Attention Routing — Modality Fractions (sum to ~1 minus other tokens)")
     for ax, (key, yl, title) in zip(axes, specs):
@@ -577,8 +612,8 @@ def fig5_base_attribution(ep_data: EpData):
     _attribution_fig(ep_data, "base", "Base Camera", "fig5_base_attribution")
 
 
-def fig6_wrist_attribution(ep_data: EpData):
-    _attribution_fig(ep_data, "wrist", "Left Wrist Camera", "fig6_wrist_attribution")
+def fig6_lwrist_attribution(ep_data: EpData):
+    _attribution_fig(ep_data, "lwrist", "Left Wrist Camera", "fig6_lwrist_attribution")
 
 
 def fig7_task_attribution(ep_data: EpData):
@@ -587,6 +622,8 @@ def fig7_task_attribution(ep_data: EpData):
 
 def fig8_state_attribution(ep_data: EpData):
     _tok_attribution_fig(ep_data, "state", "State Tokens", "fig8_state_attribution")
+
+
 
 
 
@@ -619,22 +656,26 @@ def main():
         print(f"  [{i:3d}/{len(episodes)}] task {ep['task_id']} ep{ep['episode_num']:03d} ({label})",
               end=" … ", flush=True)
         records = load_episode(ep)
-        ep_data[label].append(records)
+        if records:
+            ep_data[label].append(records)
+        else:
+            print(f"0 steps — skipped (no usable step files found)")
+            continue
         print(f"{len(records)} steps")
 
     ns = len(ep_data["success"]); nf = len(ep_data["failure"])
     print(f"\n{ns} success episodes, {nf} failure episodes.\n")
 
     print("Rendering figures …")
-    fig1_attention_concentration(ep_data)
-    fig2_attention_routing(ep_data)
+    fig1_attention_concentration(ep_data)   # base / lwrist / task / state gini
+    fig2_attention_routing(ep_data)         # modality fractions
     fig_inter_head_agreement(ep_data)
     fig3_action_oscillation(ep_data)
     fig4_motion_consensus(ep_data)
-    fig5_base_attribution(ep_data)
-    fig6_wrist_attribution(ep_data)
-    fig7_task_attribution(ep_data)
-    fig8_state_attribution(ep_data)
+    fig5_base_attribution(ep_data)          # base cam method-pair agreement
+    fig6_lwrist_attribution(ep_data)        # wrist cam method-pair agreement
+    fig7_task_attribution(ep_data)          # task token method-pair agreement
+    fig8_state_attribution(ep_data)         # state token method-pair agreement
     print("Done.")
 
 

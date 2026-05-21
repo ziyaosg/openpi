@@ -4,6 +4,7 @@ import logging
 import json
 import math
 import pathlib
+from typing import Optional
 
 import imageio
 from libero.libero import benchmark
@@ -37,6 +38,7 @@ class Args:
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
+    max_episodes: Optional[int] = None  # If set, evenly select this many episodes total across all tasks
 
     #################################################################################################################
     # Utils
@@ -77,9 +79,22 @@ def eval_libero(args: Args) -> None:
     episode_summaries = []
     infer_global_idx = 0  # increments once per client.infer(...), matching step_*.npy numbering
 
+    # Pre-compute how many tasks and episodes per task to run
+    if args.max_episodes is not None:
+        episodes_per_task = args.max_episodes // num_tasks_in_suite
+        if episodes_per_task == 0:
+            # Fewer episodes than tasks: run 1 episode each for the first max_episodes tasks
+            num_tasks_to_eval = min(args.max_episodes, num_tasks_in_suite)
+            episodes_per_task = 1
+        else:
+            num_tasks_to_eval = num_tasks_in_suite
+    else:
+        episodes_per_task = args.num_trials_per_task
+        num_tasks_to_eval = num_tasks_in_suite
+
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    for task_id in tqdm.tqdm(range(num_tasks_to_eval)):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -89,9 +104,13 @@ def eval_libero(args: Args) -> None:
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
 
+        # Compute which episode indices to run for this task
+        n_available = len(initial_states)
+        episode_indices = np.linspace(0, n_available - 1, min(episodes_per_task, n_available), dtype=int)
+
         # Start episodes
         task_episodes, task_successes = 0, 0
-        for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
+        for episode_idx in tqdm.tqdm(episode_indices):
             logging.info(f"\nTask: {task_description}")
 
             # Reset environment
@@ -199,8 +218,10 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
         # Log final results
-        logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
-        logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+        if task_episodes > 0:
+            logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
+        if total_episodes > 0:
+            logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
     
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
@@ -240,4 +261,4 @@ def _quat2axisangle(quat):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    tyro.cli(eval_libero)
+    eval_libero(tyro.cli(Args))

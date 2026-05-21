@@ -9,7 +9,6 @@ Layout (6 rows × 4 modality columns):
 from __future__ import annotations
 
 import glob
-from collections import defaultdict
 from pathlib import Path
 from typing import List
 
@@ -17,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .grid_utils import (
+    EpisodeInfo,
     load_episode_infos,
     episode_for_step,
     slugify,
@@ -34,11 +34,11 @@ from .grid_visualization_raw_alpha import CLIP_PERCENTILE, GAMMA
 # ============================================================
 # CONFIG
 # ============================================================
-INPUT_DIR              = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629"
-OUTPUT_DIR             = "/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260511_040629/heatmap_gradcam_tokens"
-EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260511_040629/client_output/episode_summaries.json"
+INPUT_DIR              = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260516_034939"
+OUTPUT_DIR             = "/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260516_034939/heatmap_gradcam_tokens"
+EPISODE_SUMMARIES_JSON = "/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260516_034939/client_output/episode_summaries.json"
 
-MAX_EPISODES_PER_TASK = 6   # set to None for unlimited
+MAX_TOTAL_EPISODES = 60   # set to None for unlimited
 
 NUM_ACTION_TOKENS = 5
 APPLY_RELU        = True
@@ -126,11 +126,19 @@ def process_one(npy_path: str, out_png: str) -> None:
         task_scores  = rec[f"outputs/debug/gradcam/action_tokens/{tok_idx}/task"][0].astype(np.float32)
         state_scores = rec[f"outputs/debug/gradcam/action_tokens/{tok_idx}/state"][0].astype(np.float32)
 
+        # state_idx are absolute piece indices; adjust for digit-only arrays
+        _n_state_pieces = len(rec["outputs/debug/tokens/state/piece_id"])
+        _state_k = state_idx[0] if state_idx else 0
+        if len(state_scores) < _n_state_pieces:
+            _state_sel = state_scores[np.array(state_idx) - _state_k]
+        else:
+            _state_sel = state_scores[state_idx]
+
         task_strips.append(render_token_strip_as_image(
             _clip_normalize_1d(task_scores[task_idx]), task_labels, row_h, TASK_TILE_W, _TOKEN_FONT, bg=BG
         ))
         state_strips.append(render_token_strip_as_image(
-            _clip_normalize_1d(state_scores[state_idx]), state_labels, row_h, STATE_TILE_W, _TOKEN_FONT, bg=BG
+            _clip_normalize_1d(_state_sel), state_labels, row_h, STATE_TILE_W, _TOKEN_FONT, bg=BG
         ))
 
     def _overlays(heats: List[np.ndarray]) -> List[np.ndarray]:
@@ -173,6 +181,53 @@ def process_one(npy_path: str, out_png: str) -> None:
 
 
 # ============================================================
+# EPISODE SELECTION
+# ============================================================
+def _select_episodes(episodes: List[EpisodeInfo], max_total: int | None) -> set | None:
+    """Return the set of allowed episode_nums, or None for unlimited.
+
+    Strategy: aim for an even success/failure split.  Failures are ranked by
+    proximity to the chosen successes (consecutive episodes run similar tasks).
+    If either side runs out, the deficit is filled from the other side, again
+    ranked by proximity to whatever has already been chosen.
+    """
+    if max_total is None:
+        return None
+    successes = [ep for ep in episodes if ep.success]
+    failures  = [ep for ep in episodes if not ep.success]
+
+    target_suc  = max_total // 2
+    target_fail = max_total - target_suc
+
+    # Even-split initial selection
+    chosen_suc = successes[:target_suc]
+    if chosen_suc:
+        suc_nums    = [ep.episode_num for ep in chosen_suc]
+        ranked_fail = sorted(failures, key=lambda ep: min(abs(ep.episode_num - s) for s in suc_nums))
+    else:
+        ranked_fail = list(failures)
+    chosen_fail = ranked_fail[:target_fail]
+
+    chosen = list(chosen_suc) + list(chosen_fail)
+
+    # Fill any shortfall (whichever side ran out) by proximity to already chosen
+    need = max_total - len(chosen)
+    if need > 0:
+        chosen_nums = {ep.episode_num for ep in chosen}
+        pool        = [ep for ep in episodes if ep.episode_num not in chosen_nums]
+        if chosen:
+            ref  = [ep.episode_num for ep in chosen]
+            pool = sorted(pool, key=lambda ep: min(abs(ep.episode_num - r) for r in ref))
+        chosen += pool[:need]
+
+    n_suc  = sum(1 for ep in chosen if ep.success)
+    n_fail = len(chosen) - n_suc
+    print(f"[info] selected {len(chosen)} episodes: {n_suc} success, {n_fail} failure "
+          f"(out of {len(successes)} / {len(failures)} total).")
+    return {ep.episode_num for ep in chosen}
+
+
+# ============================================================
 # MAIN
 # ============================================================
 def main() -> None:
@@ -185,36 +240,16 @@ def main() -> None:
     if not files:
         raise FileNotFoundError(f"No step_*.npy found in {INPUT_DIR}")
 
-    # Pre-scan existing episode dirs so subsequent runs pick up from where they left off.
-    # Keys: task_id → set of episode_nums that already have (or are being) visualized.
-    allowed_episodes: dict = defaultdict(set)
-    if out_dir.exists():
-        for task_dir in out_dir.iterdir():
-            if not task_dir.is_dir() or not task_dir.name.startswith("t"):
-                continue
-            try:
-                task_id = int(task_dir.name.split("_")[0][1:])
-            except (ValueError, IndexError):
-                continue
-            for ep_dir in task_dir.iterdir():
-                if ep_dir.is_dir() and ep_dir.name.startswith("ep"):
-                    try:
-                        ep_num = int(ep_dir.name.split("_")[0][2:])
-                        allowed_episodes[task_id].add(ep_num)
-                    except (ValueError, IndexError):
-                        pass
+    allowed_episode_nums = _select_episodes(episodes, MAX_TOTAL_EPISODES)
 
     skipped = 0
     for f in files:
         s   = step_index(f)
         ep  = episode_for_step(s, episodes)
 
-        if MAX_EPISODES_PER_TASK is not None:
-            if ep.episode_num not in allowed_episodes[ep.task_id]:
-                if len(allowed_episodes[ep.task_id]) >= MAX_EPISODES_PER_TASK:
-                    skipped += 1
-                    continue
-                allowed_episodes[ep.task_id].add(ep.episode_num)
+        if allowed_episode_nums is not None and ep.episode_num not in allowed_episode_nums:
+            skipped += 1
+            continue
 
         out = str(
             out_dir
