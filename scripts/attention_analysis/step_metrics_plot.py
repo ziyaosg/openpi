@@ -422,6 +422,7 @@ def _to_matrix(ep_list: List[List[dict]], key: str) -> np.ndarray:
 
 
 def _plot_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
+    means = {}
     for label, cm, ci in [
         ("success", COL_S_MEAN, COL_S_IND),
         ("failure", COL_F_MEAN, COL_F_IND),
@@ -433,10 +434,16 @@ def _plot_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
         xs  = np.arange(arr.shape[1])
         for row in arr:
             valid = ~np.isnan(row)
-            ax.plot(xs[valid], row[valid], color=ci, lw=LW_IND, alpha=ALPHA_IND)
-        mean  = np.nanmean(arr, axis=0)
+            ax.plot(xs[valid], row[valid], color=ci, lw=LW_IND, alpha=ALPHA_IND, zorder=1)
+        means[label] = (xs, np.nanmean(arr, axis=0), cm)
+    # Draw mean lines on top, success last so it is never obscured
+    for label in ("failure", "success"):
+        if label not in means:
+            continue
+        xs, mean, cm = means[label]
         valid = ~np.isnan(mean)
-        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label)
+        zorder = 3 if label == "success" else 2
+        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label, zorder=zorder)
 
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", pad=3)
