@@ -119,6 +119,13 @@ def process_one(npy_path: str, out_png: str) -> None:
     # Token labels and content indices for task and state modalities
     task_labels,  task_idx  = get_token_labels(rec, "task",  strip_prefix="Task: ",  strip_suffix=", ")
     state_labels, state_idx = get_token_labels(rec, "state", strip_prefix="State: ", strip_suffix=";\n")
+    # state_piece_id covers "State: {digits};\n", so piece indices start at k (the number of
+    # "State: " prefix pieces), not at 0.  gc_state/ra_state/rw_state/vc_state are 0-based
+    # digit-token indices, so subtract k to align.
+    _state_pe_key = "outputs/debug/tokens/state/piece_end"
+    if _state_pe_key in rec:
+        _k_state = int(np.sum(np.asarray(rec[_state_pe_key]) <= len("State: ")))
+        state_idx = np.maximum(state_idx - _k_state, 0)
 
     # Camera images upscaled to IMG_DISPLAY × IMG_DISPLAY (base + left wrist only)
     imgs = [

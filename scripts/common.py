@@ -561,9 +561,14 @@ def make_state_text_panel(
         piece_id    = np.asarray(record[piece_id_key])
         piece_begin = np.asarray(record["outputs/debug/tokens/state/piece_begin"])
         piece_end   = np.asarray(record["outputs/debug/tokens/state/piece_end"])
-        n = min(len(piece_id), len(state_scores))
-        scores = np.abs(state_scores[:n]).astype(np.float32)
-        return _render_char_heatmap(scores, piece_id[:n], piece_begin[:n], piece_end[:n],
+        # piece_id covers "State: {digits};\n"; state_scores covers digit tokens only (0-indexed).
+        # k = number of "State: " prefix pieces (those whose character range ends within the
+        # first 7 chars).  Align by placing state_scores at piece indices k..k+state_token_len.
+        k = int(np.sum(piece_end <= len("State: ")))
+        scores_full = np.zeros(len(piece_id), dtype=np.float32)
+        n_dig = min(len(state_scores), len(piece_id) - k)
+        scores_full[k : k + n_dig] = np.abs(state_scores[:n_dig])
+        return _render_char_heatmap(scores_full, piece_id, piece_begin, piece_end,
                                     strip_prefix="State: ", strip_suffix=";\n",
                                     title="State", target_height_px=target_height_px)
 
@@ -577,8 +582,3 @@ def make_state_text_panel(
     return _render_piece_heatmap(np.abs(state_scores[:n]).astype(np.float32),
                                   state_ids[:n], "State tokens", target_height_px,
                                   tile_w_in=tile_w / 150)
-    buf.seek(0)
-
-    pil = Image.open(buf).convert("RGB")
-    ratio = target_height_px / pil.height
-    return pil.resize((max(int(pil.width * ratio), 1), target_height_px), Image.BILINEAR)

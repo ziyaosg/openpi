@@ -109,8 +109,8 @@ def main(args: Args) -> None:
                 policy_tag = args.policy.config
             case Default():
                 policy_tag = args.env.value
-        # record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{policy_tag}_{timestamp}"
-        record_dir = f"/data/ziyao/policy_records_{policy_tag}_{timestamp}"
+        record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{policy_tag}_{timestamp}"
+        # record_dir = f"/data/ziyao/policy_records_{policy_tag}_{timestamp}"
         policy = _policy.PolicyRecorder(policy, record_dir)
 
     hostname = socket.gethostname()
