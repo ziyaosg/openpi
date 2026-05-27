@@ -554,6 +554,8 @@ class Pi0FAST(_model.BaseModel):
 
         # FIRST 5 ACTION TOKENS
         target_tokens = []
+        _tok_entropies = []   # JAX scalars, one per action token
+        _tok_logps = []
         current_logit = last_logit
         current_kv = kv_cache
         current_pos = prefill_len
@@ -561,6 +563,12 @@ class Pi0FAST(_model.BaseModel):
         for step_i in range(5):
             token_i = jnp.argmax(current_logit, axis=-1)  # (B, 1)
             target_tokens.append(token_i)
+
+            # Per-token entropy and log-prob (batch=1 so [0,0] gives vocab logits)
+            _lp_i = jax.nn.log_softmax(current_logit[0, 0], axis=-1)  # (V,)
+            _p_i  = jnp.exp(_lp_i)
+            _tok_entropies.append(-jnp.sum(_p_i * _lp_i))   # scalar JAX tracer
+            _tok_logps.append(_lp_i[token_i[0, 0]])          # scalar JAX tracer
 
             token_emb_i = self.PaliGemma.llm(token_i, embed_only=True)
             positions_i = current_pos[:, None] + 1
@@ -584,6 +592,10 @@ class Pi0FAST(_model.BaseModel):
             "tokens": {},
             "attn": {},
             "spans": spans,
+            "entropy": jnp.stack(_tok_entropies),           # [5] per-token entropy
+            "logp":    jnp.stack(_tok_logps),               # [5] log-prob of chosen token
+            "au":      jnp.stack(_tok_entropies),           # single-model AU proxy
+            "eu":      jnp.zeros(5, dtype=jnp.float32),    # no ensemble → EU = 0
         }
 
         for step_i, target_token_i in enumerate(target_tokens):
