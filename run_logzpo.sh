@@ -3,7 +3,7 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 #SBATCH --time=04:00:00
-#SBATCH --partition=day
+#SBATCH --partition=scavenge_gpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 
