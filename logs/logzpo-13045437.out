@@ -1,0 +1,102 @@
+Devices: [CudaDevice(id=0)]
+
+Loading data...
+Total: 3000 episodes, 2463 success, 537 failure
+
+Split:
+  Train: 2100 — 2100 success, 0 failure
+  Val:   450 — 181 success, 269 failure
+  Test:  450 — 182 success, 268 failure
+
+Successful episodes in train: 2100
+Setting 1 — full:    2100 successful episodes
+Setting 2 — matched: 1050 successful episodes
+Split indices saved.
+
+Built train_X for setting1_full: (109574, 512)
+
+==================================================
+Training setting1_full
+  Timesteps: 109574, obs_dim: 512
+==================================================
+  Resuming from checkpoint: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_checkpoint_setting1_full.pkl
+  Resumed from epoch 901, best loss: 0.4853
+  Epoch  999/1000 — loss: 0.4839 (best: 0.4839)
+  Checkpoint saved at epoch 999
+Done. Best loss: 0.4839
+  Checkpoint deleted (training complete)
+Params saved: logpZO_params_setting1_full.pkl
+
+Scoring val and test...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 52.2945, failure: 56.7126, correct: True
+  Peak AUROC:        0.6873 at t=0
+  Mean AUROC t=0-39: 0.5442
+  AUROC at t=39:     0.4686
+  Is monotonic:      False
+  Baseline AUPRC:    0.5978 (random)
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_auroc_setting1_full_val.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 53.1705, failure: 56.1583, correct: True
+  Peak AUROC:        0.7032 at t=0
+  Mean AUROC t=0-39: 0.4988
+  AUROC at t=39:     0.4263
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956 (random)
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_auroc_setting1_full_test.csv
+
+Built train_X for setting2_matched: (54889, 512)
+
+==================================================
+Training setting2_matched
+  Timesteps: 54889, obs_dim: 512
+==================================================
+  Resuming from checkpoint: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_checkpoint_setting2_matched.pkl
+  Resumed from epoch 1, best loss: 1.3918
+  Epoch  100/1000 — loss: 0.6148 (best: 0.6139)
+  Checkpoint saved at epoch 100
+  Epoch  200/1000 — loss: 0.5538 (best: 0.5531)
+  Checkpoint saved at epoch 200
+  Epoch  300/1000 — loss: 0.5294 (best: 0.5264)
+  Checkpoint saved at epoch 300
+  Epoch  400/1000 — loss: 0.5168 (best: 0.5149)
+  Checkpoint saved at epoch 400
+  Epoch  500/1000 — loss: 0.5080 (best: 0.5072)
+  Checkpoint saved at epoch 500
+  Epoch  600/1000 — loss: 0.5048 (best: 0.5023)
+  Checkpoint saved at epoch 600
+  Epoch  700/1000 — loss: 0.4998 (best: 0.4985)
+  Checkpoint saved at epoch 700
+  Epoch  800/1000 — loss: 0.4983 (best: 0.4959)
+  Checkpoint saved at epoch 800
+  Epoch  900/1000 — loss: 0.4964 (best: 0.4933)
+  Checkpoint saved at epoch 900
+  Epoch  999/1000 — loss: 0.4944 (best: 0.4920)
+  Checkpoint saved at epoch 999
+Done. Best loss: 0.4920
+  Checkpoint deleted (training complete)
+Params saved: logpZO_params_setting2_matched.pkl
+
+Scoring val and test...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 64.3606, failure: 72.9641, correct: True
+  Peak AUROC:        0.7022 at t=0
+  Mean AUROC t=0-39: 0.5661
+  AUROC at t=39:     0.5001
+  Is monotonic:      False
+  Baseline AUPRC:    0.5978 (random)
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_auroc_setting2_matched_val.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 65.7230, failure: 72.3906, correct: True
+  Peak AUROC:        0.7000 at t=0
+  Mean AUROC t=0-39: 0.5237
+  AUROC at t=39:     0.4647
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956 (random)
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v4/logpZO_auroc_setting2_matched_test.csv
+
+All done.

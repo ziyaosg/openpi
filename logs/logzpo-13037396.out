@@ -1,0 +1,23 @@
+Devices: [CpuDevice(id=0)]
+
+Loading data...
+Total: 3000 episodes, 2463 success, 537 failure
+
+Split:
+  Train: 2100 — 2100 success, 0 failure
+  Val:   450 — 181 success, 269 failure
+  Test:  450 — 182 success, 268 failure
+
+Successful episodes in train: 2100
+Setting 1 — full:    2100 successful episodes
+Setting 2 — matched: 1050 successful episodes
+Split indices saved.
+
+Built train_X for setting1_full: (109574, 512)
+
+==================================================
+Training setting1_full
+  Timesteps: 109574, obs_dim: 512
+==================================================
+  Epoch    0/1000 — loss: 1.3081 (best: 1.3081)
+  Epoch  100/1000 — loss: 0.5579 (best: 0.5579)

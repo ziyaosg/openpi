@@ -1,0 +1,102 @@
+Loading data...
+Val:  450 episodes
+Test: 450 episodes
+
+==================================================
+Processing setting1_full
+==================================================
+Loading params from /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_params_setting1_full.pkl...
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  setting1_full / val: 450 episodes, 269 failures
+  Sanity — success: 51.8311, failure: 56.2368, correct: True
+    t=   0: auroc=0.6866, auprc=0.7378, f1=0.7746, p=0.6759, r=0.9071
+    t=  10: auroc=0.5213, auprc=0.6040, f1=0.7582, p=0.6163, r=0.9851
+    t=  20: auroc=0.5392, auprc=0.6141, f1=0.7553, p=0.6096, r=0.9926
+    t=  30: auroc=0.5227, auprc=0.6125, f1=0.7535, p=0.6045, r=1.0000
+    t=  40: auroc=0.4662, auprc=0.5769, f1=0.7483, p=0.5978, r=1.0000
+    t=  50: auroc=0.5236, auprc=0.6096, f1=0.7518, p=0.6121, r=0.9740
+    t=  60: auroc=0.5385, auprc=0.6153, f1=0.7596, p=0.6152, r=0.9926
+    t=  70: auroc=0.5551, auprc=0.6265, f1=0.7614, p=0.6161, r=0.9963
+    t=  80: auroc=0.5601, auprc=0.6327, f1=0.7596, p=0.6152, r=0.9926
+    t=  90: auroc=0.5721, auprc=0.6408, f1=0.7637, p=0.6361, r=0.9554
+    t= 100: auroc=0.5754, auprc=0.6407, f1=0.7674, p=0.6379, r=0.9628
+  Peak AUROC:        0.6866 at t=0
+  Peak F1:           0.7754 at t=3
+  Mean AUROC t=0-39: 0.5419
+  Is monotonic:      False
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting1_full_val.csv
+
+  setting1_full / test: 450 episodes, 268 failures
+  Sanity — success: 52.7222, failure: 55.6740, correct: True
+    t=   0: auroc=0.7023, auprc=0.7254, f1=0.7929, p=0.6958, r=0.9216
+    t=  10: auroc=0.5045, auprc=0.5677, f1=0.7611, p=0.6172, r=0.9925
+    t=  20: auroc=0.4742, auprc=0.5471, f1=0.7539, p=0.6050, r=1.0000
+    t=  30: auroc=0.4722, auprc=0.5507, f1=0.7549, p=0.6063, r=1.0000
+    t=  40: auroc=0.4227, auprc=0.5361, f1=0.7465, p=0.5956, r=1.0000
+    t=  50: auroc=0.4794, auprc=0.5696, f1=0.7468, p=0.6056, r=0.9739
+    t=  60: auroc=0.5039, auprc=0.5799, f1=0.7511, p=0.6069, r=0.9851
+    t=  70: auroc=0.5220, auprc=0.5988, f1=0.7546, p=0.6087, r=0.9925
+    t=  80: auroc=0.5342, auprc=0.6034, f1=0.7599, p=0.6277, r=0.9627
+    t=  90: auroc=0.5484, auprc=0.6133, f1=0.7654, p=0.6304, r=0.9739
+    t= 100: auroc=0.5610, auprc=0.6214, f1=0.7715, p=0.6325, r=0.9888
+  Peak AUROC:        0.7023 at t=0
+  Peak F1:           0.7929 at t=0
+  Mean AUROC t=0-39: 0.4977
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting1_full_test.csv
+
+==================================================
+Processing setting2_matched
+==================================================
+Loading params from /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_params_setting2_matched.pkl...
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  setting2_matched / val: 450 episodes, 269 failures
+  Sanity — success: 64.4044, failure: 73.0543, correct: True
+    t=   0: auroc=0.7020, auprc=0.7630, f1=0.7772, p=0.7073, r=0.8625
+    t=  10: auroc=0.5522, auprc=0.6184, f1=0.7648, p=0.6250, r=0.9851
+    t=  20: auroc=0.5553, auprc=0.6233, f1=0.7636, p=0.6311, r=0.9665
+    t=  30: auroc=0.5447, auprc=0.6250, f1=0.7554, p=0.6185, r=0.9703
+    t=  40: auroc=0.5014, auprc=0.5924, f1=0.7532, p=0.6111, r=0.9814
+    t=  50: auroc=0.5649, auprc=0.6336, f1=0.7605, p=0.6238, r=0.9740
+    t=  60: auroc=0.5782, auprc=0.6413, f1=0.7641, p=0.6256, r=0.9814
+    t=  70: auroc=0.5977, auprc=0.6573, f1=0.7659, p=0.6265, r=0.9851
+    t=  80: auroc=0.6070, auprc=0.6640, f1=0.7706, p=0.6297, r=0.9926
+    t=  90: auroc=0.6192, auprc=0.6706, f1=0.7735, p=0.6399, r=0.9777
+    t= 100: auroc=0.6221, auprc=0.6709, f1=0.7750, p=0.6357, r=0.9926
+  Peak AUROC:        0.7020 at t=0
+  Peak F1:           0.7877 at t=6
+  Mean AUROC t=0-39: 0.5664
+  Is monotonic:      False
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting2_matched_val.csv
+
+  setting2_matched / test: 450 episodes, 268 failures
+  Sanity — success: 65.7686, failure: 72.4838, correct: True
+    t=   0: auroc=0.6993, auprc=0.7384, f1=0.7835, p=0.7033, r=0.8843
+    t=  10: auroc=0.5307, auprc=0.5810, f1=0.7633, p=0.6200, r=0.9925
+    t=  20: auroc=0.4951, auprc=0.5565, f1=0.7557, p=0.6145, r=0.9813
+    t=  30: auroc=0.4989, auprc=0.5618, f1=0.7514, p=0.6088, r=0.9813
+    t=  40: auroc=0.4621, auprc=0.5470, f1=0.7472, p=0.5991, r=0.9925
+    t=  50: auroc=0.5222, auprc=0.5888, f1=0.7622, p=0.6186, r=0.9925
+    t=  60: auroc=0.5439, auprc=0.5983, f1=0.7670, p=0.6341, r=0.9701
+    t=  70: auroc=0.5582, auprc=0.6132, f1=0.7697, p=0.6316, r=0.9851
+    t=  80: auroc=0.5717, auprc=0.6213, f1=0.7788, p=0.6439, r=0.9851
+    t=  90: auroc=0.5871, auprc=0.6323, f1=0.7824, p=0.6456, r=0.9925
+    t= 100: auroc=0.6012, auprc=0.6427, f1=0.7848, p=0.6458, r=1.0000
+  Peak AUROC:        0.6993 at t=0
+  Peak F1:           0.7891 at t=1
+  Mean AUROC t=0-39: 0.5238
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting2_matched_test.csv
+
+Combined CSV saved to /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_all.csv
+Total rows: 416
+
+All done.

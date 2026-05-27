@@ -1,0 +1,100 @@
+
+==================================================
+Source 1/5: policy_records_pi05_libero_20260512_182606
+  Episodes: 500
+  Success: 470, Failure: 30
+  Episode 0/500 — T=52
+  Episode 50/500 — T=49
+  Episode 100/500 — T=45
+  Episode 150/500 — T=50
+  Episode 200/500 — T=45
+  Episode 250/500 — T=35
+  Episode 300/500 — T=42
+  Episode 350/500 — T=51
+  Episode 400/500 — T=75
+  Episode 450/500 — T=47
+  Done. Running total: 500 episodes
+
+==================================================
+Source 2/5: policy_records_pi05_libero_20260512_201032
+  Episodes: 500
+  Success: 453, Failure: 47
+  Episode 0/500 — T=54
+  Episode 50/500 — T=48
+  Episode 100/500 — T=42
+  Episode 150/500 — T=49
+  Episode 200/500 — T=47
+  Episode 250/500 — T=33
+  Episode 300/500 — T=43
+  Episode 350/500 — T=49
+  Episode 400/500 — T=79
+  Episode 450/500 — T=49
+  Done. Running total: 1000 episodes
+
+==================================================
+Source 3/5: policy_records_pi05_liberoplus_20260522_032743
+  Episodes: 500
+  Success: 416, Failure: 84
+  Episode 0/500 — T=51
+  Episode 50/500 — T=50
+  Episode 100/500 — T=49
+  Episode 150/500 — T=50
+  Episode 200/500 — T=43
+  Episode 250/500 — T=50
+  Episode 300/500 — T=51
+  Episode 350/500 — T=104
+  Episode 400/500 — T=53
+  Episode 450/500 — T=104
+  Done. Running total: 1500 episodes
+
+==================================================
+Source 4/5: policy_records_pi05_liberoplus_20260522_031717
+  Episodes: 500
+  Success: 416, Failure: 84
+  Episode 0/500 — T=51
+  Episode 50/500 — T=50
+  Episode 100/500 — T=49
+  Episode 150/500 — T=50
+  Episode 200/500 — T=43
+  Episode 250/500 — T=50
+  Episode 300/500 — T=51
+  Episode 350/500 — T=104
+  Episode 400/500 — T=53
+  Episode 450/500 — T=104
+  Done. Running total: 2000 episodes
+
+==================================================
+Source 5/5: policy_records_pi05_liberoplus_20260524_163155
+  Episodes: 1000
+  Success: 708, Failure: 292
+  Episode 0/1000 — T=51
+  Episode 50/1000 — T=50
+  Episode 100/1000 — T=49
+  Episode 150/1000 — T=50
+  Episode 200/1000 — T=43
+  Episode 250/1000 — T=50
+  Episode 300/1000 — T=51
+  Episode 350/1000 — T=104
+  Episode 400/1000 — T=53
+  Episode 450/1000 — T=104
+  Episode 500/1000 — T=104
+  Episode 550/1000 — T=104
+  Episode 600/1000 — T=91
+  Episode 650/1000 — T=54
+  Episode 700/1000 — T=64
+  Episode 750/1000 — T=46
+  Episode 800/1000 — T=104
+  Episode 850/1000 — T=104
+  Episode 900/1000 — T=104
+  Episode 950/1000 — T=90
+  Done. Running total: 3000 episodes
+
+==================================================
+Total: 3000 episodes, 2463 success, 537 failure
+Saved:
+  all_global_cond.npy — 3000 episodes
+  all_labels.npy      — (3000,), 2463 success
+
+Episode length stats:
+  Min: 28, Max: 104, Mean: 61.4
+  Any NaN: False

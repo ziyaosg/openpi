@@ -3,83 +3,107 @@ import numpy as np
 from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────
-ROLLOUT_DIR = Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260524_163155")
-OUTPUT_DIR = Path("/nfs/roberts/scratch/pi_tkf6/as4643/policy_records_pi05_liberoplus_20260524_163155_logpZO_data")
-# ROLLOUT_DIR = Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_032743")
-# OUTPUT_DIR = Path("/nfs/roberts/scratch/pi_tkf6/as4643/policy_records_pi05_liberoplus_20260522_032743_logpZO_data")
+SOURCES = [
+    {
+        "rollout_dir": Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260512_182606"),
+        "summary": Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260512_182606/client_output/episode_summaries.json"),
+    },
+    {
+        "rollout_dir": Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260512_201032"),
+        "summary": Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi05_libero_20260512_201032/client_output/episode_summaries.json"),
+    },
+    {
+        "rollout_dir": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_032743"),
+        "summary": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_032743/client_output/episode_summaries.json"),
+    },
+    {
+        "rollout_dir": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_031717"),
+        "summary": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_031717/client_output/episode_summaries.json"),
+    },
+    {
+        "rollout_dir": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260524_163155"),
+        "summary": Path("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260524_163155/client_output/episode_summaries.json"),
+    },
+]
+
+OUTPUT_DIR = Path("/nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# ── Load episode summaries ────────────────────────────────────────────────
-with open("/nfs/roberts/project/pi_tkf6/zs377/policy_records_pi05_liberoplus_20260524_163155/client_output/episode_summaries.json") as f:
-    episodes = json.load(f)
-
+# ── Extraction function ───────────────────────────────────────────────────
 def extract_global_cond(data):
-    """
-    v shape:       (2, 968, 1, 256)  → (L, S, K, H)
-    weights shape: (2, 8, 10, 968)   → (L, heads, T_action, S)
-
-    Strategy: for each layer, compute attention-weighted sum of V vectors
-    across sequence positions, averaged over action tokens and heads.
-    Then concatenate across layers → (2 * 256,) = (512,)
-    """
     v = data["outputs/debug/attn/v"]        # (2, 968, 1, 256)
     w = data["outputs/debug/attn/weights"]  # (2, 8, 10, 968)
-
-    # Remove K=1 head dim from v → (2, 968, 256)
-    v = v[:, :, 0, :]
-
-    # Mean over query heads → (2, 10, 968)
-    w = w.mean(axis=1)
-
-    # Mean over action tokens → (2, 968)
-    w = w.mean(axis=1)
-
-    # Normalize weights to sum to 1 over sequence dim
-    w = w / (w.sum(axis=1, keepdims=True) + 1e-8)  # (2, 968)
-
-    # Weighted sum of V over sequence positions → (2, 256)
-    # einsum: for each layer l, sum over s: w[l,s] * v[l,s,:]
+    v = v[:, :, 0, :]                       # (2, 968, 256)
+    w = w.mean(axis=1)                      # (2, 10, 968)
+    w = w.mean(axis=1)                      # (2, 968)
+    w = w / (w.sum(axis=1, keepdims=True) + 1e-8)
     global_cond = np.einsum("ls,lsd->ld", w, v)  # (2, 256)
+    return global_cond.reshape(-1)           # (512,)
 
-    # Flatten across layers → (512,)
-    global_cond = global_cond.reshape(-1)
+# ── Extract across all sources ────────────────────────────────────────────
+all_global_cond = []  # one entry per episode, each (T, 512)
+all_labels = []       # one bool per episode
 
-    return global_cond
+total_episodes = 0
+total_success = 0
+total_failure = 0
 
-# ── Extract ───────────────────────────────────────────────────────────────
-train_global_cond = []
-test_global_cond = []
-test_labels = []
+for source_idx, source in enumerate(SOURCES):
+    rollout_dir = source["rollout_dir"]
+    summary_path = source["summary"]
 
-for ep_idx, ep in enumerate(episodes):
-    start_idx = ep["start_idx"]
-    end_idx = ep["end_idx"]
-    success = ep["success"]
+    print(f"\n{'='*50}")
+    print(f"Source {source_idx+1}/5: {rollout_dir.name}")
 
-    ep_global_cond = []
+    with open(summary_path) as f:
+        episodes = json.load(f)
 
-    for t in range(start_idx, end_idx + 1):
-        data = np.load(ROLLOUT_DIR / f"step_{t}.npy", allow_pickle=True).item()
-        global_cond = extract_global_cond(data)  # (512,)
-        ep_global_cond.append(global_cond)
+    print(f"  Episodes: {len(episodes)}")
+    source_success = sum(ep["success"] for ep in episodes)
+    source_failure = len(episodes) - source_success
+    print(f"  Success: {source_success}, Failure: {source_failure}")
 
-    ep_global_cond = np.stack(ep_global_cond)  # (T, 512)
-    test_global_cond.append(ep_global_cond)
-    test_labels.append(success)
+    for ep_idx, ep in enumerate(episodes):
+        start_idx = ep["start_idx"]
+        end_idx = ep["end_idx"]
+        success = ep["success"]
 
-    if success:
-        train_global_cond.append(ep_global_cond)
+        ep_global_cond = []
 
-    if ep_idx % 10 == 0:
-        print(f"Processed {ep_idx}/{len(episodes)} episodes")
+        for t in range(start_idx, end_idx + 1):
+            data = np.load(rollout_dir / f"step_{t}.npy", allow_pickle=True).item()
+            global_cond = extract_global_cond(data)
+            ep_global_cond.append(global_cond)
 
-# ── Save ──────────────────────────────────────────────────────────────────
-train_X = np.concatenate(train_global_cond, axis=0)  # (N_success_steps, 512)
-np.save(OUTPUT_DIR / "train_X.npy", train_X)
-np.save(OUTPUT_DIR / "test_global_cond.npy", np.array(test_global_cond, dtype=object))
-np.save(OUTPUT_DIR / "test_labels.npy", np.array(test_labels))
+        ep_global_cond = np.stack(ep_global_cond)  # (T, 512)
+        all_global_cond.append(ep_global_cond)
+        all_labels.append(success)
 
-print(f"Done.")
-print(f"Train: {train_X.shape}")
-print(f"Test episodes: {len(test_global_cond)}")
-print(f"  Success: {sum(test_labels)}, Fail: {len(test_labels) - sum(test_labels)}")
+        if ep_idx % 50 == 0:
+            print(f"  Episode {ep_idx}/{len(episodes)} — T={len(ep_global_cond)}")
+
+    total_episodes += len(episodes)
+    total_success += source_success
+    total_failure += source_failure
+    print(f"  Done. Running total: {total_episodes} episodes")
+
+# ── Save combined ─────────────────────────────────────────────────────────
+print(f"\n{'='*50}")
+print(f"Total: {total_episodes} episodes, {total_success} success, {total_failure} failure")
+
+all_labels_arr = np.array(all_labels)
+all_global_cond_arr = np.array(all_global_cond, dtype=object)
+
+np.save(OUTPUT_DIR / "all_global_cond.npy", all_global_cond_arr)
+np.save(OUTPUT_DIR / "all_labels.npy", all_labels_arr)
+
+print(f"Saved:")
+print(f"  all_global_cond.npy — {len(all_global_cond_arr)} episodes")
+print(f"  all_labels.npy      — {all_labels_arr.shape}, {all_labels_arr.sum()} success")
+
+# ── Sanity check ──────────────────────────────────────────────────────────
+ep_lengths = [len(gc) for gc in all_global_cond]
+print(f"\nEpisode length stats:")
+print(f"  Min: {min(ep_lengths)}, Max: {max(ep_lengths)}, Mean: {np.mean(ep_lengths):.1f}")
+any_nan = any(np.isnan(gc).any() for gc in all_global_cond)
+print(f"  Any NaN: {any_nan}")
