@@ -1,0 +1,63 @@
+Loading params...
+Params loaded.
+Loading test data...
+Loaded 1000 episodes — 292 failures, 708 successes
+
+Episode length stats:
+  Min: 29, Max: 104, Mean: 68.1
+  Episodes with length > 39: 952
+  Episodes with length > 79: 333
+  Full max timestep: 104
+
+Model: 6 layers, hidden_dim=1024, obs_dim=512
+
+Computing scores...
+  Episode 0/1000 — T=51, score range: [47.31, 157.37]
+  Episode 100/1000 — T=49, score range: [36.04, 117.55]
+  Episode 200/1000 — T=43, score range: [39.63, 150.19]
+  Episode 300/1000 — T=51, score range: [35.96, 180.70]
+  Episode 400/1000 — T=53, score range: [42.89, 130.72]
+  Episode 500/1000 — T=104, score range: [35.92, 135.32]
+  Episode 600/1000 — T=91, score range: [44.49, 181.49]
+  Episode 700/1000 — T=64, score range: [40.39, 120.03]
+  Episode 800/1000 — T=104, score range: [49.63, 117.83]
+  Episode 900/1000 — T=104, score range: [57.40, 423.11]
+All scores computed.
+
+Sanity check:
+  Mean score — success: 68.5245
+  Mean score — failure: 79.2970
+  Failure > success: True
+
+Building output rows (all timesteps)...
+Output dataframe shape: (68130, 5)
+Timestep range: 0 - 103
+
+Computing rolling AUROC (t=0 to 103)...
+  t=   0: auroc=0.7653, n_episodes=1000, n_fail=292
+  t=  10: auroc=0.5745, n_episodes=1000, n_fail=292
+  t=  20: auroc=0.6654, n_episodes=1000, n_fail=292
+  t=  30: auroc=0.6346, n_episodes=995, n_fail=292
+  t=  40: auroc=0.6462, n_episodes=951, n_fail=292
+  t=  50: auroc=0.6400, n_episodes=639, n_fail=292
+  t=  60: auroc=0.7337, n_episodes=430, n_fail=292
+  t=  70: auroc=0.6558, n_episodes=377, n_fail=292
+  t=  80: auroc=0.6499, n_episodes=329, n_fail=292
+  t=  90: auroc=0.6606, n_episodes=309, n_fail=292
+  t= 100: auroc=0.6113, n_episodes=294, n_fail=292
+
+AUROC summary (all timesteps):
+  Timesteps evaluated: 104
+  Peak AUROC:          0.7653 at t=0
+  Mean AUROC:          0.6293
+  AUROC at t=0:        0.7653
+  AUROC at t=39:       0.6300
+
+Mean logpZO score by outcome:
+              mean        std        min         max
+failure                                             
+success  68.541359  23.109012  27.548975  330.273468
+failure  79.297025  25.325030  32.706974  594.705383
+
+Saved to /home/as4643/scratch_pi_tkf6/as4643/policy_records_pi05_liberoplus_20260524_163155_logpZO_data/logpZO_full_output.csv
+AUROC summary saved to /home/as4643/scratch_pi_tkf6/as4643/policy_records_pi05_liberoplus_20260524_163155_logpZO_data/logpZO_auroc_summary.csv
