@@ -1,0 +1,106 @@
+Loading data...
+Train success: 2100 episodes
+Val:  450 episodes
+Test: 450 episodes
+
+==================================================
+Processing setting1_full
+==================================================
+Computing scores for CP band calibration (2100 episodes)...
+Cal scores — mean: 51.63, std: 21.33, max: 527.82
+Building CP band...
+  Clipped 105 outlier trajectories (max score > 204.81)
+  Remaining: 1995 trajectories
+  CP band: n1=997, n2=998, h=1.1042
+  scal_t mean: 111.6570, scal_t range: [64.0342, 121.7341]
+  mu_t mean: 53.7170, mu_t range: [39.9615, 57.8648]
+  Band mean: 177.0098, Band range: [110.6687, 190.2798]
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 51.8311, failure: 56.2368, correct: True
+  CP band detection:
+    TPR:              0.1561
+    TNR:              0.8619
+    Balanced acc:     0.5090
+    Weighted acc:     0.5780
+    Precision:        0.6269
+    Recall:           0.1561
+    F1:               0.2500
+    Mean detect time: 38.78
+  Rolling AUROC:
+    Peak AUROC:        0.6866 at t=0
+    Mean AUROC t=0-39: 0.5419
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting1_full_val.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 52.7222, failure: 55.6740, correct: True
+  CP band detection:
+    TPR:              0.1679
+    TNR:              0.8516
+    Balanced acc:     0.5098
+    Weighted acc:     0.5751
+    Precision:        0.6250
+    Recall:           0.1679
+    F1:               0.2647
+    Mean detect time: 40.26
+  Rolling AUROC:
+    Peak AUROC:        0.7023 at t=0
+    Mean AUROC t=0-39: 0.4977
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting1_full_test.csv
+
+==================================================
+Processing setting2_matched
+==================================================
+Computing scores for CP band calibration (1050 episodes)...
+Cal scores — mean: 63.95, std: 28.24, max: 1432.43
+Building CP band...
+  Clipped 53 outlier trajectories (max score > 257.70)
+  Remaining: 997 trajectories
+  CP band: n1=498, n2=499, h=1.1524
+  scal_t mean: 144.3208, scal_t range: [52.6415, 161.3476]
+  mu_t mean: 67.3317, mu_t range: [49.7187, 72.8642]
+  Band mean: 233.6521, Band range: [110.3846, 258.0192]
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 64.4044, failure: 73.0543, correct: True
+  CP band detection:
+    TPR:              0.2045
+    TNR:              0.9006
+    Balanced acc:     0.5525
+    Weighted acc:     0.6206
+    Precision:        0.7534
+    Recall:           0.2045
+    F1:               0.3216
+    Mean detect time: 31.95
+  Rolling AUROC:
+    Peak AUROC:        0.7020 at t=0
+    Mean AUROC t=0-39: 0.5664
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting2_matched_val.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 65.7686, failure: 72.4838, correct: True
+  CP band detection:
+    TPR:              0.1828
+    TNR:              0.8242
+    Balanced acc:     0.5035
+    Weighted acc:     0.5648
+    Precision:        0.6049
+    Recall:           0.1828
+    F1:               0.2808
+    Mean detect time: 34.40
+  Rolling AUROC:
+    Peak AUROC:        0.6993 at t=0
+    Mean AUROC t=0-39: 0.5238
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting2_matched_test.csv
+
+Combined saved to /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_all.csv
+
+All done.

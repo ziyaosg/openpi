@@ -1,0 +1,98 @@
+Loading data...
+Train success: 2100 episodes
+Val:  450 episodes
+Test: 450 episodes
+
+==================================================
+Processing setting1_full
+==================================================
+Computing scores for CP band calibration (2100 episodes)...
+Cal scores — mean: 51.63, std: 21.33, max: 527.82
+Building CP band...
+  CP band: n1=1050, n2=1050, h=1.1971
+  Band mean: 213.3450, Band range: [116.5700, 234.9188]
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 51.8311, failure: 56.2368, correct: True
+  CP band detection:
+    TPR:              0.0669
+    TNR:              0.9171
+    Balanced acc:     0.4920
+    Weighted acc:     0.5752
+    Precision:        0.5455
+    Recall:           0.0669
+    F1:               0.1192
+    Mean detect time: 37.39
+  Rolling AUROC:
+    Peak AUROC:        0.6866 at t=0
+    Mean AUROC t=0-39: 0.5419
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting1_full_val2.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 52.7222, failure: 55.6740, correct: True
+  CP band detection:
+    TPR:              0.0933
+    TNR:              0.9176
+    Balanced acc:     0.5054
+    Weighted acc:     0.5842
+    Precision:        0.6250
+    Recall:           0.0933
+    F1:               0.1623
+    Mean detect time: 36.12
+  Rolling AUROC:
+    Peak AUROC:        0.7023 at t=0
+    Mean AUROC t=0-39: 0.4977
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting1_full_test2.csv
+
+==================================================
+Processing setting2_matched
+==================================================
+Computing scores for CP band calibration (1050 episodes)...
+Cal scores — mean: 63.95, std: 28.24, max: 1432.43
+Building CP band...
+  CP band: n1=525, n2=525, h=1.1875
+  Band mean: 261.6828, Band range: [112.1388, 315.3360]
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  val: 450 episodes, 269 failures
+  Sanity — success: 64.4044, failure: 73.0543, correct: True
+  CP band detection:
+    TPR:              0.1115
+    TNR:              0.9116
+    Balanced acc:     0.5116
+    Weighted acc:     0.5898
+    Precision:        0.6522
+    Recall:           0.1115
+    F1:               0.1905
+    Mean detect time: 25.96
+  Rolling AUROC:
+    Peak AUROC:        0.7020 at t=0
+    Mean AUROC t=0-39: 0.5664
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting2_matched_val2.csv
+
+  test: 450 episodes, 268 failures
+  Sanity — success: 65.7686, failure: 72.4838, correct: True
+  CP band detection:
+    TPR:              0.0858
+    TNR:              0.8956
+    Balanced acc:     0.4907
+    Weighted acc:     0.5681
+    Precision:        0.5476
+    Recall:           0.0858
+    F1:               0.1484
+    Mean detect time: 30.26
+  Rolling AUROC:
+    Peak AUROC:        0.6993 at t=0
+    Mean AUROC t=0-39: 0.5238
+    Is monotonic:      False
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_setting2_matched_test2.csv
+
+Combined saved to /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_cp_all2.csv
+
+All done.

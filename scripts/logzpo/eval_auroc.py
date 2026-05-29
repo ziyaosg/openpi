@@ -60,8 +60,14 @@ def compute_scores_for_episodes(compute_score, episode_indices):
         scores.append(np.array(s))
     return scores
 
-# ── Helper: best F1 ───────────────────────────────────────────────────────
-def best_f1_precision_recall(labels, scores):
+def get_cummax_at_t(scores, t):
+    return np.array([
+        np.max(scores[i][:min(t + 1, len(scores[i]))])
+        for i in range(len(scores))
+    ])
+
+# ── Helper: best F1 threshold ─────────────────────────────────────────────
+def best_f1_threshold(labels, scores):
     precision_curve, recall_curve, thresholds = precision_recall_curve(labels, scores)
     f1_scores = np.where(
         (precision_curve[:-1] + recall_curve[:-1]) > 0,
@@ -78,14 +84,66 @@ def best_f1_precision_recall(labels, scores):
         float(thresholds[best_idx]),
     )
 
-# ── Rolling metrics ───────────────────────────────────────────────────────
-def compute_rolling_metrics(scores, episode_indices, setting_name, split_name):
+# ── Calibrate per-timestep thresholds on val ─────────────────────────────
+def calibrate_per_timestep_thresholds(val_scores, val_failure_labels):
+    max_T = max(len(s) for s in val_scores)
+    thresholds_by_t = {}
+    for t in range(max_T):
+        cummax_t = get_cummax_at_t(val_scores, t)
+        _, _, _, threshold = best_f1_threshold(val_failure_labels, cummax_t)
+        thresholds_by_t[t] = threshold
+    print(f"  Per-timestep thresholds calibrated for {max_T} timesteps")
+    return thresholds_by_t
+
+# ── Calibrate single threshold on val at final timestep ──────────────────
+def calibrate_single_threshold(val_scores, val_failure_labels):
+    cummax_final = np.array([np.max(s) for s in val_scores])
+    _, _, val_f1, threshold = best_f1_threshold(val_failure_labels, cummax_final)
+    print(f"  Single threshold: {threshold:.4f}, Val F1 at final t: {val_f1:.4f}")
+    return threshold
+
+# ── Compute classification metrics ────────────────────────────────────────
+def get_classification_metrics(preds, failure_labels):
+    tp = int(((preds == 1) & (failure_labels == 1)).sum())
+    fp = int(((preds == 1) & (failure_labels == 0)).sum())
+    fn = int(((preds == 0) & (failure_labels == 1)).sum())
+    tn = int(((preds == 0) & (failure_labels == 0)).sum())
+    n_ep     = len(failure_labels)
+    n_failure = int(failure_labels.sum())
+
+    tpr       = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    tnr       = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall    = tpr
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    balanced_acc = (tpr + tnr) / 2
+    beta         = (n_ep - n_failure) / n_ep
+    weighted_acc = beta * tpr + (1 - beta) * tnr
+
+    return {
+        "tpr":          tpr,
+        "tnr":          tnr,
+        "precision":    precision,
+        "recall":       recall,
+        "f1":           f1,
+        "balanced_acc": balanced_acc,
+        "weighted_acc": weighted_acc,
+        "tp":           tp,
+        "fp":           fp,
+        "fn":           fn,
+        "tn":           tn,
+    }
+
+# ── Rolling metrics: per-timestep calibrated threshold ───────────────────
+def compute_rolling_metrics_per_timestep(scores, episode_indices,
+                                         thresholds_by_t, setting_name, split_name):
     failure_labels = 1 - all_labels[episode_indices].astype(int)
-    n_ep = len(episode_indices)
-    max_T = max(len(s) for s in scores)
+    n_ep   = len(episode_indices)
+    max_T  = max(len(s) for s in scores)
     baseline_auprc = float(failure_labels.sum()) / n_ep
 
-    print(f"\n  {setting_name} / {split_name}: {n_ep} episodes, {int(failure_labels.sum())} failures")
+    print(f"\n  [{setting_name} / {split_name}] per-timestep threshold")
+    print(f"  {n_ep} episodes, {int(failure_labels.sum())} failures")
 
     success_mean = np.mean([scores[i].mean() for i in range(n_ep) if failure_labels[i] == 0])
     failure_mean = np.mean([scores[i].mean() for i in range(n_ep) if failure_labels[i] == 1])
@@ -94,55 +152,105 @@ def compute_rolling_metrics(scores, episode_indices, setting_name, split_name):
     summary_rows = []
 
     for t in range(max_T):
-        cummax_t = np.array([
-            np.max(scores[i][:min(t + 1, len(scores[i]))])
-            for i in range(n_ep)
-        ])
-
+        cummax_t = get_cummax_at_t(scores, t)
         auroc = float(roc_auc_score(failure_labels, cummax_t))
         auprc = float(average_precision_score(failure_labels, cummax_t))
-        precision, recall, f1, threshold = best_f1_precision_recall(failure_labels, cummax_t)
+
+        threshold = thresholds_by_t.get(t, thresholds_by_t[max(thresholds_by_t.keys())])
+        preds = (cummax_t > threshold).astype(int)
+        clf   = get_classification_metrics(preds, failure_labels)
 
         summary_rows.append({
             "timestep":           t,
             "auroc":              auroc,
             "auprc":              auprc,
-            "precision":          precision,
-            "recall":             recall,
-            "f1":                 f1,
             "threshold":          threshold,
+            "threshold_type":     "per_timestep",
             "mean_score_success": float(cummax_t[failure_labels == 0].mean()),
             "mean_score_failure": float(cummax_t[failure_labels == 1].mean()),
             "n_episodes":         n_ep,
             "n_failure":          int(failure_labels.sum()),
             "setting":            setting_name,
             "split":              split_name,
+            **clf,
         })
 
         if t % 10 == 0:
-            print(f"    t={t:4d}: auroc={auroc:.4f}, auprc={auprc:.4f}, f1={f1:.4f}, p={precision:.4f}, r={recall:.4f}")
+            print(f"    t={t:4d}: auroc={auroc:.4f}, f1={clf['f1']:.4f}, "
+                  f"p={clf['precision']:.4f}, r={clf['recall']:.4f}, "
+                  f"threshold={threshold:.2f} | "
+                  f"TP={clf['tp']}, FP={clf['fp']}, FN={clf['fn']}, TN={clf['tn']}")
 
     aurocs = [r["auroc"] for r in summary_rows]
-    f1s = [r["f1"] for r in summary_rows]
+    f1s    = [r["f1"]    for r in summary_rows]
     print(f"  Peak AUROC:        {max(aurocs):.4f} at t={aurocs.index(max(aurocs))}")
-    print(f"  Peak F1:           {max(f1s):.4f} at t={f1s.index(max(f1s))}")
+    print(f"  Peak F1:           {max(f1s):.4f}   at t={f1s.index(max(f1s))}")
     print(f"  Mean AUROC t=0-39: {np.mean(aurocs[:40]):.4f}")
-    print(f"  Is monotonic:      {all(aurocs[i] <= aurocs[i+1] + 1e-10 for i in range(len(aurocs)-1))}")
+    print(f"  Baseline AUPRC:    {baseline_auprc:.4f}")
+
+    return summary_rows
+
+# ── Rolling metrics: single fixed threshold ───────────────────────────────
+def compute_rolling_metrics_single_threshold(scores, episode_indices,
+                                              fixed_threshold, setting_name, split_name):
+    failure_labels = 1 - all_labels[episode_indices].astype(int)
+    n_ep   = len(episode_indices)
+    max_T  = max(len(s) for s in scores)
+    baseline_auprc = float(failure_labels.sum()) / n_ep
+
+    print(f"\n  [{setting_name} / {split_name}] single fixed threshold = {fixed_threshold:.4f}")
+    print(f"  {n_ep} episodes, {int(failure_labels.sum())} failures")
+
+    summary_rows = []
+
+    for t in range(max_T):
+        cummax_t = get_cummax_at_t(scores, t)
+        auroc = float(roc_auc_score(failure_labels, cummax_t))
+        auprc = float(average_precision_score(failure_labels, cummax_t))
+
+        preds = (cummax_t > fixed_threshold).astype(int)
+        clf   = get_classification_metrics(preds, failure_labels)
+
+        summary_rows.append({
+            "timestep":           t,
+            "auroc":              auroc,
+            "auprc":              auprc,
+            "threshold":          fixed_threshold,
+            "threshold_type":     "single_fixed",
+            "mean_score_success": float(cummax_t[failure_labels == 0].mean()),
+            "mean_score_failure": float(cummax_t[failure_labels == 1].mean()),
+            "n_episodes":         n_ep,
+            "n_failure":          int(failure_labels.sum()),
+            "setting":            setting_name,
+            "split":              split_name,
+            **clf,
+        })
+
+        if t % 10 == 0:
+            print(f"    t={t:4d}: auroc={auroc:.4f}, f1={clf['f1']:.4f}, "
+                  f"p={clf['precision']:.4f}, r={clf['recall']:.4f} | "
+                  f"TP={clf['tp']}, FP={clf['fp']}, FN={clf['fn']}, TN={clf['tn']}")
+
+    aurocs = [r["auroc"] for r in summary_rows]
+    f1s    = [r["f1"]    for r in summary_rows]
+    print(f"  Peak AUROC:        {max(aurocs):.4f} at t={aurocs.index(max(aurocs))}")
+    print(f"  Peak F1:           {max(f1s):.4f}   at t={f1s.index(max(f1s))}")
+    print(f"  Mean AUROC t=0-39: {np.mean(aurocs[:40]):.4f}")
+    print(f"  Is F1 monotonic:   {all(f1s[i] <= f1s[i+1] + 1e-10 for i in range(len(f1s)-1))}")
     print(f"  Baseline AUPRC:    {baseline_auprc:.4f}")
 
     return summary_rows
 
 # ── Run both settings ─────────────────────────────────────────────────────
-all_summary_rows = []
+all_rows_per_t  = []
+all_rows_single = []
 
 for setting_name in ["setting1_full", "setting2_matched"]:
     print(f"\n{'='*50}")
     print(f"Processing {setting_name}")
     print(f"{'='*50}")
 
-    param_path = RESULTS_DIR / f"logpZO_params_{setting_name}.pkl"
-    print(f"Loading params from {param_path}...")
-    with open(param_path, "rb") as f:
+    with open(RESULTS_DIR / f"logpZO_params_{setting_name}.pkl", "rb") as f:
         params = pickle.load(f)
 
     model = FlowNet(hidden_dim=HIDDEN_DIM, n_layers=N_LAYERS, obs_dim=OBS_DIM)
@@ -154,20 +262,47 @@ for setting_name in ["setting1_full", "setting2_matched"]:
     print(f"Scoring test ({len(test_idx)} episodes)...")
     test_scores = compute_scores_for_episodes(compute_score, test_idx)
 
+    val_failure_labels = 1 - all_labels[val_idx].astype(int)
+
+    # ── Per-timestep calibration ──────────────────────────────────────────
+    print(f"\nCalibrating per-timestep thresholds on val...")
+    thresholds_by_t = calibrate_per_timestep_thresholds(val_scores, val_failure_labels)
+
     for split_name, scores, idx in [
         ("val",  val_scores,  val_idx),
         ("test", test_scores, test_idx),
     ]:
-        rows = compute_rolling_metrics(scores, idx, setting_name, split_name)
-        all_summary_rows.extend(rows)
-
-        out_path = RESULTS_DIR / f"logpZO_summary_{setting_name}_{split_name}.csv"
+        rows = compute_rolling_metrics_per_timestep(
+            scores, idx, thresholds_by_t, setting_name, split_name
+        )
+        all_rows_per_t.extend(rows)
+        out_path = RESULTS_DIR / f"logpZO_per_t_{setting_name}_{split_name}.csv"
         pd.DataFrame(rows).to_csv(out_path, index=False)
         print(f"  Saved: {out_path}")
 
-# ── Save combined CSV ─────────────────────────────────────────────────────
-combined_path = RESULTS_DIR / "logpZO_summary_all.csv"
-pd.DataFrame(all_summary_rows).to_csv(combined_path, index=False)
-print(f"\nCombined CSV saved to {combined_path}")
-print(f"Total rows: {len(all_summary_rows)}")
+    # ── Single fixed threshold calibration ───────────────────────────────
+    print(f"\nCalibrating single fixed threshold on val...")
+    fixed_threshold = calibrate_single_threshold(val_scores, val_failure_labels)
+
+    for split_name, scores, idx in [
+        ("val",  val_scores,  val_idx),
+        ("test", test_scores, test_idx),
+    ]:
+        rows = compute_rolling_metrics_single_threshold(
+            scores, idx, fixed_threshold, setting_name, split_name
+        )
+        all_rows_single.extend(rows)
+        out_path = RESULTS_DIR / f"logpZO_single_{setting_name}_{split_name}.csv"
+        pd.DataFrame(rows).to_csv(out_path, index=False)
+        print(f"  Saved: {out_path}")
+
+# ── Save combined CSVs ────────────────────────────────────────────────────
+pd.DataFrame(all_rows_per_t).to_csv(
+    RESULTS_DIR / "logpZO_per_t_all.csv", index=False)
+pd.DataFrame(all_rows_single).to_csv(
+    RESULTS_DIR / "logpZO_single_all.csv", index=False)
+pd.DataFrame(all_rows_per_t + all_rows_single).to_csv(
+    RESULTS_DIR / "logpZO_all.csv", index=False)
+
+print(f"\nSaved combined CSVs to {RESULTS_DIR}")
 print("\nAll done.")

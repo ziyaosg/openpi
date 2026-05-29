@@ -1,0 +1,191 @@
+Loading data...
+Val:  450 episodes
+Test: 450 episodes
+
+==================================================
+Processing setting1_full
+==================================================
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+Calibrating per-timestep thresholds on val...
+  Per-timestep thresholds calibrated for 104 timesteps
+
+  [setting1_full / val] per-timestep threshold
+  450 episodes, 269 failures
+  Sanity — success: 51.8311, failure: 56.2368, correct: True
+    t=   0: auroc=0.6866, f1=0.7707, p=0.6741, r=0.8996, threshold=35.05 | TP=242, FP=117, FN=27, TN=64
+    t=  10: auroc=0.5213, f1=0.7564, p=0.6154, r=0.9814, threshold=48.45 | TP=264, FP=165, FN=5, TN=16
+    t=  20: auroc=0.5392, f1=0.7518, p=0.6078, r=0.9851, threshold=52.37 | TP=265, FP=171, FN=4, TN=10
+    t=  30: auroc=0.5227, f1=0.7500, p=0.6027, r=0.9926, threshold=49.84 | TP=267, FP=176, FN=2, TN=5
+    t=  40: auroc=0.4662, f1=0.7448, p=0.5960, r=0.9926, threshold=50.12 | TP=267, FP=181, FN=2, TN=0
+    t=  50: auroc=0.5236, f1=0.7500, p=0.6112, r=0.9703, threshold=67.78 | TP=261, FP=166, FN=8, TN=15
+    t=  60: auroc=0.5385, f1=0.7578, p=0.6143, r=0.9888, threshold=67.15 | TP=266, FP=167, FN=3, TN=14
+    t=  70: auroc=0.5551, f1=0.7596, p=0.6152, r=0.9926, threshold=67.15 | TP=267, FP=167, FN=2, TN=14
+    t=  80: auroc=0.5601, f1=0.7578, p=0.6143, r=0.9888, threshold=71.92 | TP=266, FP=167, FN=3, TN=14
+    t=  90: auroc=0.5721, f1=0.7619, p=0.6352, r=0.9517, threshold=80.86 | TP=256, FP=147, FN=13, TN=34
+    t= 100: auroc=0.5754, f1=0.7656, p=0.6370, r=0.9591, threshold=80.86 | TP=258, FP=147, FN=11, TN=34
+  Peak AUROC:        0.6866 at t=0
+  Peak F1:           0.7735   at t=3
+  Mean AUROC t=0-39: 0.5419
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_per_t_setting1_full_val.csv
+
+  [setting1_full / test] per-timestep threshold
+  450 episodes, 268 failures
+  Sanity — success: 52.7222, failure: 55.6740, correct: True
+    t=   0: auroc=0.7023, f1=0.7886, p=0.6870, r=0.9254, threshold=35.05 | TP=248, FP=113, FN=20, TN=69
+    t=  10: auroc=0.5045, f1=0.7522, p=0.6172, r=0.9627, threshold=48.45 | TP=258, FP=160, FN=10, TN=22
+    t=  20: auroc=0.4742, f1=0.7396, p=0.6019, r=0.9590, threshold=52.37 | TP=257, FP=170, FN=11, TN=12
+    t=  30: auroc=0.4722, f1=0.7532, p=0.6054, r=0.9963, threshold=49.84 | TP=267, FP=174, FN=1, TN=8
+    t=  40: auroc=0.4227, f1=0.7448, p=0.5947, r=0.9963, threshold=50.12 | TP=267, FP=182, FN=1, TN=0
+    t=  50: auroc=0.4794, f1=0.7457, p=0.6042, r=0.9739, threshold=67.78 | TP=261, FP=171, FN=7, TN=11
+    t=  60: auroc=0.5039, f1=0.7500, p=0.6055, r=0.9851, threshold=67.15 | TP=264, FP=172, FN=4, TN=10
+    t=  70: auroc=0.5220, f1=0.7535, p=0.6073, r=0.9925, threshold=67.15 | TP=266, FP=172, FN=2, TN=10
+    t=  80: auroc=0.5342, f1=0.7582, p=0.6148, r=0.9888, threshold=71.92 | TP=265, FP=166, FN=3, TN=16
+    t=  90: auroc=0.5484, f1=0.7590, p=0.6364, r=0.9403, threshold=80.86 | TP=252, FP=144, FN=16, TN=38
+    t= 100: auroc=0.5610, f1=0.7672, p=0.6393, r=0.9590, threshold=80.86 | TP=257, FP=145, FN=11, TN=37
+  Peak AUROC:        0.7023 at t=0
+  Peak F1:           0.7886   at t=0
+  Mean AUROC t=0-39: 0.4977
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_per_t_setting1_full_test.csv
+
+Calibrating single fixed threshold on val...
+  Single threshold: 80.8609, Val F1 at final t: 0.7692
+
+  [setting1_full / val] single fixed threshold = 80.8609
+  450 episodes, 269 failures
+    t=   0: auroc=0.6866, f1=0.0292, p=0.8000, r=0.0149 | TP=4, FP=1, FN=265, TN=180
+    t=  10: auroc=0.5213, f1=0.4730, p=0.6000, r=0.3903 | TP=105, FP=70, FN=164, TN=111
+    t=  20: auroc=0.5392, f1=0.5981, p=0.6260, r=0.5725 | TP=154, FP=92, FN=115, TN=89
+    t=  30: auroc=0.5227, f1=0.6252, p=0.5986, r=0.6543 | TP=176, FP=118, FN=93, TN=63
+    t=  40: auroc=0.4662, f1=0.6478, p=0.5856, r=0.7249 | TP=195, FP=138, FN=74, TN=43
+    t=  50: auroc=0.5236, f1=0.7145, p=0.6156, r=0.8513 | TP=229, FP=143, FN=40, TN=38
+    t=  60: auroc=0.5385, f1=0.7304, p=0.6237, r=0.8810 | TP=237, FP=143, FN=32, TN=38
+    t=  70: auroc=0.5551, f1=0.7381, p=0.6276, r=0.8959 | TP=241, FP=143, FN=28, TN=38
+    t=  80: auroc=0.5601, f1=0.7470, p=0.6278, r=0.9219 | TP=248, FP=147, FN=21, TN=34
+    t=  90: auroc=0.5721, f1=0.7619, p=0.6352, r=0.9517 | TP=256, FP=147, FN=13, TN=34
+    t= 100: auroc=0.5754, f1=0.7656, p=0.6370, r=0.9591 | TP=258, FP=147, FN=11, TN=34
+  Peak AUROC:        0.6866 at t=0
+  Peak F1:           0.7674   at t=102
+  Mean AUROC t=0-39: 0.5419
+  Is F1 monotonic:   False
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_single_setting1_full_val.csv
+
+  [setting1_full / test] single fixed threshold = 80.8609
+  450 episodes, 268 failures
+    t=   0: auroc=0.7023, f1=0.0366, p=1.0000, r=0.0187 | TP=5, FP=0, FN=263, TN=182
+    t=  10: auroc=0.5045, f1=0.4775, p=0.6023, r=0.3955 | TP=106, FP=70, FN=162, TN=112
+    t=  20: auroc=0.4742, f1=0.5749, p=0.6180, r=0.5373 | TP=144, FP=89, FN=124, TN=93
+    t=  30: auroc=0.4722, f1=0.6106, p=0.5986, r=0.6231 | TP=167, FP=112, FN=101, TN=70
+    t=  40: auroc=0.4227, f1=0.6328, p=0.5789, r=0.6978 | TP=187, FP=136, FN=81, TN=46
+    t=  50: auroc=0.4794, f1=0.7005, p=0.6088, r=0.8246 | TP=221, FP=142, FN=47, TN=40
+    t=  60: auroc=0.5039, f1=0.7287, p=0.6233, r=0.8769 | TP=235, FP=142, FN=33, TN=40
+    t=  70: auroc=0.5220, f1=0.7343, p=0.6240, r=0.8918 | TP=239, FP=144, FN=29, TN=38
+    t=  80: auroc=0.5342, f1=0.7477, p=0.6308, r=0.9179 | TP=246, FP=144, FN=22, TN=38
+    t=  90: auroc=0.5484, f1=0.7590, p=0.6364, r=0.9403 | TP=252, FP=144, FN=16, TN=38
+    t= 100: auroc=0.5610, f1=0.7672, p=0.6393, r=0.9590 | TP=257, FP=145, FN=11, TN=37
+  Peak AUROC:        0.7023 at t=0
+  Peak F1:           0.7727   at t=102
+  Mean AUROC t=0-39: 0.4977
+  Is F1 monotonic:   False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_single_setting1_full_test.csv
+
+==================================================
+Processing setting2_matched
+==================================================
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+Calibrating per-timestep thresholds on val...
+  Per-timestep thresholds calibrated for 104 timesteps
+
+  [setting2_matched / val] per-timestep threshold
+  450 episodes, 269 failures
+  Sanity — success: 64.4044, failure: 73.0543, correct: True
+    t=   0: auroc=0.7020, f1=0.7752, p=0.7064, r=0.8587, threshold=45.18 | TP=231, FP=96, FN=38, TN=85
+    t=  10: auroc=0.5522, f1=0.7630, p=0.6241, r=0.9814, threshold=61.81 | TP=264, FP=159, FN=5, TN=22
+    t=  20: auroc=0.5553, f1=0.7599, p=0.6293, r=0.9591, threshold=77.45 | TP=258, FP=152, FN=11, TN=29
+    t=  30: auroc=0.5447, f1=0.7518, p=0.6167, r=0.9628, threshold=77.45 | TP=259, FP=161, FN=10, TN=20
+    t=  40: auroc=0.5014, f1=0.7496, p=0.6093, r=0.9740, threshold=79.33 | TP=262, FP=168, FN=7, TN=13
+    t=  50: auroc=0.5649, f1=0.7569, p=0.6220, r=0.9665, threshold=91.66 | TP=260, FP=158, FN=9, TN=23
+    t=  60: auroc=0.5782, f1=0.7605, p=0.6238, r=0.9740, threshold=91.66 | TP=262, FP=158, FN=7, TN=23
+    t=  70: auroc=0.5977, f1=0.7623, p=0.6247, r=0.9777, threshold=91.66 | TP=263, FP=158, FN=6, TN=23
+    t=  80: auroc=0.6070, f1=0.7670, p=0.6280, r=0.9851, threshold=95.60 | TP=265, FP=157, FN=4, TN=24
+    t=  90: auroc=0.6192, f1=0.7717, p=0.6390, r=0.9740, threshold=100.48 | TP=262, FP=148, FN=7, TN=33
+    t= 100: auroc=0.6221, f1=0.7715, p=0.6340, r=0.9851, threshold=97.59 | TP=265, FP=153, FN=4, TN=28
+  Peak AUROC:        0.7020 at t=0
+  Peak F1:           0.7858   at t=6
+  Mean AUROC t=0-39: 0.5664
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_per_t_setting2_matched_val.csv
+
+  [setting2_matched / test] per-timestep threshold
+  450 episodes, 268 failures
+  Sanity — success: 65.7686, failure: 72.4838, correct: True
+    t=   0: auroc=0.6993, f1=0.7835, p=0.7033, r=0.8843, threshold=45.18 | TP=237, FP=100, FN=31, TN=82
+    t=  10: auroc=0.5307, f1=0.7515, p=0.6225, r=0.9478, threshold=61.81 | TP=254, FP=154, FN=14, TN=28
+    t=  20: auroc=0.4951, f1=0.7455, p=0.6225, r=0.9291, threshold=77.45 | TP=249, FP=151, FN=19, TN=31
+    t=  30: auroc=0.4989, f1=0.7429, p=0.6173, r=0.9328, threshold=77.45 | TP=250, FP=155, FN=18, TN=27
+    t=  40: auroc=0.4621, f1=0.7410, p=0.6052, r=0.9552, threshold=79.33 | TP=256, FP=167, FN=12, TN=15
+    t=  50: auroc=0.5222, f1=0.7569, p=0.6205, r=0.9701, threshold=91.66 | TP=260, FP=159, FN=8, TN=23
+    t=  60: auroc=0.5439, f1=0.7605, p=0.6223, r=0.9776, threshold=91.66 | TP=262, FP=159, FN=6, TN=23
+    t=  70: auroc=0.5582, f1=0.7641, p=0.6241, r=0.9851, threshold=91.66 | TP=264, FP=159, FN=4, TN=23
+    t=  80: auroc=0.5717, f1=0.7749, p=0.6370, r=0.9888, threshold=95.60 | TP=265, FP=151, FN=3, TN=31
+    t=  90: auroc=0.5871, f1=0.7745, p=0.6429, r=0.9739, threshold=100.48 | TP=261, FP=145, FN=7, TN=37
+    t= 100: auroc=0.6012, f1=0.7830, p=0.6449, r=0.9963, threshold=97.59 | TP=267, FP=147, FN=1, TN=35
+  Peak AUROC:        0.6993 at t=0
+  Peak F1:           0.7835   at t=0
+  Mean AUROC t=0-39: 0.5238
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_per_t_setting2_matched_test.csv
+
+Calibrating single fixed threshold on val...
+  Single threshold: 97.5861, Val F1 at final t: 0.7750
+
+  [setting2_matched / val] single fixed threshold = 97.5861
+  450 episodes, 269 failures
+    t=   0: auroc=0.7020, f1=0.0714, p=0.9091, r=0.0372 | TP=10, FP=1, FN=259, TN=180
+    t=  10: auroc=0.5522, f1=0.5263, p=0.6068, r=0.4647 | TP=125, FP=81, FN=144, TN=100
+    t=  20: auroc=0.5553, f1=0.6417, p=0.6164, r=0.6691 | TP=180, FP=112, FN=89, TN=69
+    t=  30: auroc=0.5447, f1=0.6633, p=0.6113, r=0.7249 | TP=195, FP=124, FN=74, TN=57
+    t=  40: auroc=0.5014, f1=0.6900, p=0.6028, r=0.8067 | TP=217, FP=143, FN=52, TN=38
+    t=  50: auroc=0.5649, f1=0.7387, p=0.6196, r=0.9145 | TP=246, FP=151, FN=23, TN=30
+    t=  60: auroc=0.5782, f1=0.7481, p=0.6244, r=0.9331 | TP=251, FP=151, FN=18, TN=30
+    t=  70: auroc=0.5977, f1=0.7537, p=0.6272, r=0.9442 | TP=254, FP=151, FN=15, TN=30
+    t=  80: auroc=0.6070, f1=0.7661, p=0.6313, r=0.9740 | TP=262, FP=153, FN=7, TN=28
+    t=  90: auroc=0.6192, f1=0.7697, p=0.6331, r=0.9814 | TP=264, FP=153, FN=5, TN=28
+    t= 100: auroc=0.6221, f1=0.7715, p=0.6340, r=0.9851 | TP=265, FP=153, FN=4, TN=28
+  Peak AUROC:        0.7020 at t=0
+  Peak F1:           0.7715   at t=93
+  Mean AUROC t=0-39: 0.5664
+  Is F1 monotonic:   False
+  Baseline AUPRC:    0.5978
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_single_setting2_matched_val.csv
+
+  [setting2_matched / test] single fixed threshold = 97.5861
+  450 episodes, 268 failures
+    t=   0: auroc=0.6993, f1=0.0919, p=0.8667, r=0.0485 | TP=13, FP=2, FN=255, TN=180
+    t=  10: auroc=0.5307, f1=0.5350, p=0.6207, r=0.4701 | TP=126, FP=77, FN=142, TN=105
+    t=  20: auroc=0.4951, f1=0.6193, p=0.6050, r=0.6343 | TP=170, FP=111, FN=98, TN=71
+    t=  30: auroc=0.4989, f1=0.6701, p=0.6183, r=0.7313 | TP=196, FP=121, FN=72, TN=61
+    t=  40: auroc=0.4621, f1=0.7018, p=0.6128, r=0.8209 | TP=220, FP=139, FN=48, TN=43
+    t=  50: auroc=0.5222, f1=0.7447, p=0.6282, r=0.9142 | TP=245, FP=145, FN=23, TN=37
+    t=  60: auroc=0.5439, f1=0.7653, p=0.6384, r=0.9552 | TP=256, FP=145, FN=12, TN=37
+    t=  70: auroc=0.5582, f1=0.7679, p=0.6386, r=0.9627 | TP=258, FP=146, FN=10, TN=36
+    t=  80: auroc=0.5717, f1=0.7770, p=0.6430, r=0.9813 | TP=263, FP=146, FN=5, TN=36
+    t=  90: auroc=0.5871, f1=0.7806, p=0.6448, r=0.9888 | TP=265, FP=146, FN=3, TN=36
+    t= 100: auroc=0.6012, f1=0.7830, p=0.6449, r=0.9963 | TP=267, FP=147, FN=1, TN=35
+  Peak AUROC:        0.6993 at t=0
+  Peak F1:           0.7830   at t=93
+  Mean AUROC t=0-39: 0.5238
+  Is F1 monotonic:   False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_single_setting2_matched_test.csv
+
+Saved combined CSVs to /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2
+
+All done.

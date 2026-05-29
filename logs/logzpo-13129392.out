@@ -1,0 +1,68 @@
+Loading data...
+Val:  450 episodes
+Test: 450 episodes
+
+==================================================
+Processing setting1_full
+==================================================
+Loading params from /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_params_setting1_full.pkl...
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  setting1_full
+  Val:  450 episodes, 269 failures
+  Test: 450 episodes, 268 failures
+  Sanity — success: 52.7222, failure: 55.6740, correct: True
+  Calibrating thresholds on val set...
+    t=   0: auroc=0.7023, auprc=0.7254, f1=0.7886, p=0.6870, r=0.9254, threshold=35.05
+    t=  10: auroc=0.5045, auprc=0.5677, f1=0.7522, p=0.6172, r=0.9627, threshold=48.45
+    t=  20: auroc=0.4742, auprc=0.5471, f1=0.7396, p=0.6019, r=0.9590, threshold=52.37
+    t=  30: auroc=0.4722, auprc=0.5507, f1=0.7532, p=0.6054, r=0.9963, threshold=49.84
+    t=  40: auroc=0.4227, auprc=0.5361, f1=0.7448, p=0.5947, r=0.9963, threshold=50.12
+    t=  50: auroc=0.4794, auprc=0.5696, f1=0.7457, p=0.6042, r=0.9739, threshold=67.78
+    t=  60: auroc=0.5039, auprc=0.5799, f1=0.7500, p=0.6055, r=0.9851, threshold=67.15
+    t=  70: auroc=0.5220, auprc=0.5988, f1=0.7535, p=0.6073, r=0.9925, threshold=67.15
+    t=  80: auroc=0.5342, auprc=0.6034, f1=0.7582, p=0.6148, r=0.9888, threshold=71.92
+    t=  90: auroc=0.5484, auprc=0.6133, f1=0.7590, p=0.6364, r=0.9403, threshold=80.86
+    t= 100: auroc=0.5610, auprc=0.6214, f1=0.7672, p=0.6393, r=0.9590, threshold=80.86
+  Peak AUROC:        0.7023 at t=0
+  Peak F1:           0.7886 at t=0
+  Mean AUROC t=0-39: 0.4977
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting1_full_calibrated.csv
+
+==================================================
+Processing setting2_matched
+==================================================
+Loading params from /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_params_setting2_matched.pkl...
+Scoring val (450 episodes)...
+Scoring test (450 episodes)...
+
+  setting2_matched
+  Val:  450 episodes, 269 failures
+  Test: 450 episodes, 268 failures
+  Sanity — success: 65.7686, failure: 72.4838, correct: True
+  Calibrating thresholds on val set...
+    t=   0: auroc=0.6993, auprc=0.7384, f1=0.7835, p=0.7033, r=0.8843, threshold=45.18
+    t=  10: auroc=0.5307, auprc=0.5810, f1=0.7515, p=0.6225, r=0.9478, threshold=61.81
+    t=  20: auroc=0.4951, auprc=0.5565, f1=0.7455, p=0.6225, r=0.9291, threshold=77.45
+    t=  30: auroc=0.4989, auprc=0.5618, f1=0.7429, p=0.6173, r=0.9328, threshold=77.45
+    t=  40: auroc=0.4621, auprc=0.5470, f1=0.7410, p=0.6052, r=0.9552, threshold=79.33
+    t=  50: auroc=0.5222, auprc=0.5888, f1=0.7569, p=0.6205, r=0.9701, threshold=91.66
+    t=  60: auroc=0.5439, auprc=0.5983, f1=0.7605, p=0.6223, r=0.9776, threshold=91.66
+    t=  70: auroc=0.5582, auprc=0.6132, f1=0.7641, p=0.6241, r=0.9851, threshold=91.66
+    t=  80: auroc=0.5717, auprc=0.6213, f1=0.7749, p=0.6370, r=0.9888, threshold=95.60
+    t=  90: auroc=0.5871, auprc=0.6323, f1=0.7745, p=0.6429, r=0.9739, threshold=100.48
+    t= 100: auroc=0.6012, auprc=0.6427, f1=0.7830, p=0.6449, r=0.9963, threshold=97.59
+  Peak AUROC:        0.6993 at t=0
+  Peak F1:           0.7835 at t=0
+  Mean AUROC t=0-39: 0.5238
+  Is monotonic:      False
+  Baseline AUPRC:    0.5956
+  Saved: /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_setting2_matched_calibrated.csv
+
+Combined CSV saved to /nfs/roberts/scratch/pi_tkf6/as4643/logpZO_combined_3000/results_2100_v2/logpZO_summary_all_calibrated.csv
+Total rows: 208
+
+All done.
