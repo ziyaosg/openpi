@@ -41,15 +41,15 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/home/ziyao/Documents/policy_records_pi05_libero_20260512_182606")
-OUTPUT_DIR   = Path("/home/ziyao/Documents/visualization_pi05_libero_20260512_182606/analysis")
+INPUT_DIR    = Path("/home/zs377/project_pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_032743")
+OUTPUT_DIR   = Path("/home/zs377/project_pi_tkf6/zs377/visualization_pi05_liberoplus_20260522_032743/analysis")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
 MAX_STEPS = 60   # cap per episode to keep runtime manageable
 
 # Only episodes from tasks that appear in both outcomes (success + failure).
 # Set False when running with num_trials_per_task=1 (no task has both outcomes).
-FILTER_MIXED_TASKS = True
+FILTER_MIXED_TASKS = False
 
 METHOD_NAMES = ["GradCAM", "Raw Alpha", "Raw Weights", "V-Cosine"]
 METHOD_SHORT = ["gc", "ra", "rw", "vc"]
@@ -381,7 +381,8 @@ def _plot_row(ax, ep_data: EpData, key: str, ylabel: str, title: str):
             ax.plot(xs[valid], row[valid], color=ci, lw=LW_IND, alpha=ALPHA_IND)
         mean  = np.nanmean(arr, axis=0)
         valid = ~np.isnan(mean)
-        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label)
+        zorder = 3 if label == "success" else 2
+        ax.plot(xs[valid], mean[valid], color=cm, lw=LW_MEAN, label=label, zorder=zorder)
     ax.set_ylabel(ylabel)
     ax.set_title(title, loc="left", pad=3)
     ax.spines[["top", "right"]].set_visible(False)

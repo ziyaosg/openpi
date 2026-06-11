@@ -31,11 +31,11 @@ from .common import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-INPUT_DIR    = Path("/home/ziyao/Documents/policy_records_pi05_libero_20260512_182606")
-OUTPUT_DIR   = Path("/home/ziyao/Documents/visualization_pi05_libero_20260512_182606/heatmap_combined")
+INPUT_DIR    = Path("/home/zs377/project_pi_tkf6/zs377/policy_records_pi05_liberoplus_20260522_031717")
+OUTPUT_DIR   = Path("/home/zs377/project_pi_tkf6/zs377/visualization_pi05_liberoplus_20260522_031717/heatmap_combined")
 EPISODE_JSON = INPUT_DIR / "client_output" / "episode_summaries.json"
 
-MAX_EPISODES_PER_TASK = 10   # set to None for unlimited
+MAX_EPISODES_PER_TASK = None   # set to None for unlimited
 
 ACTION_TOKEN    = 0
 VARIANT         = "summation"

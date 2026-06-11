@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import pathlib
+import re
+from typing import Optional
 
 import imageio
 from libero.libero import benchmark
@@ -37,6 +39,8 @@ class Args:
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
+    max_episodes: Optional[int] = None  # If set, select this many episodes total, balanced across base
+    # tasks, perturbation categories, and difficulty levels (per task_classification.json)
 
     #################################################################################################################
     # Utils
@@ -44,6 +48,99 @@ class Args:
     video_out_path: str = "data/libero/videos"  # Path to save videos
 
     seed: int = 7  # Random Seed (for reproducibility)
+
+
+# Variation suffixes appended to LIBERO-Plus task names on top of the base LIBERO-10/Spatial/etc.
+# task (e.g. "..._table_3", "..._view_0_0_100_0_0_initstate_12", "..._light_5", "..._language_2").
+_VARIATION_SUFFIX_RE = re.compile(
+    r"(_view_[\d_-]+_initstate_\d+|_(table|tb)_\d+|_initstate_\d+|_level\d+_sample\d+|_add_\d+|_light_\d+|_noise_\d+|_language_\d+)$"
+)
+
+
+def _base_task_name(name: str) -> str:
+    """Strips LIBERO-Plus variation suffixes to recover the underlying base task name."""
+    while True:
+        new_name = _VARIATION_SUFFIX_RE.sub("", name)
+        if new_name == name:
+            return name
+        name = new_name
+
+
+def _load_task_classification() -> dict:
+    path = pathlib.Path(benchmark.__file__).parent / "task_classification.json"
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _get_task_metadata(task_suite, suite_name: str) -> list[dict]:
+    """Returns per-task (base, category, difficulty) metadata used for balanced sampling.
+
+    Falls back to a single category/difficulty bucket (keyed by the task's own name) when the
+    suite has no entries in task_classification.json (e.g. libero_90).
+    """
+    classification = _load_task_classification().get(suite_name, [])
+    by_name = {entry["name"]: entry for entry in classification}
+    metadata = []
+    for task_id in range(task_suite.n_tasks):
+        task = task_suite.get_task(task_id)
+        entry = by_name.get(task.name)
+        if entry is None:
+            metadata.append({"base": task.name, "category": "default", "difficulty": 0})
+        else:
+            metadata.append(
+                {
+                    "base": _base_task_name(entry["name"]),
+                    "category": entry["category"],
+                    "difficulty": entry["difficulty_level"],
+                }
+            )
+    return metadata
+
+
+def _select_episode_counts(metadata: list[dict], max_episodes: int, capacity: int, seed: int) -> np.ndarray:
+    """Greedily distributes `max_episodes` episode slots across tasks so the running selection
+    stays as balanced as possible across base tasks, perturbation categories, and difficulty
+    levels simultaneously. Returns a per-task episode count (each <= capacity).
+    """
+    n_tasks = len(metadata)
+    bases = sorted({m["base"] for m in metadata})
+    categories = sorted({m["category"] for m in metadata})
+    difficulties = sorted({m["difficulty"] for m in metadata})
+
+    base_ids = np.array([bases.index(m["base"]) for m in metadata])
+    cat_ids = np.array([categories.index(m["category"]) for m in metadata])
+    diff_ids = np.array([difficulties.index(m["difficulty"]) for m in metadata])
+
+    base_count = np.zeros(len(bases))
+    cat_count = np.zeros(len(categories))
+    diff_count = np.zeros(len(difficulties))
+
+    remaining = np.full(n_tasks, capacity, dtype=int)
+    counts = np.zeros(n_tasks, dtype=int)
+
+    rng = np.random.default_rng(seed)
+    jitter = rng.random(n_tasks) * 1e-6  # tiny fixed-per-task tie-break, avoids always picking task 0
+
+    n_select = min(max_episodes, int(remaining.sum()))
+    for _ in range(n_select):
+        score = (
+            base_count[base_ids] / len(bases)
+            + cat_count[cat_ids] / len(categories)
+            + diff_count[diff_ids] / len(difficulties)
+            + jitter
+        )
+        score = np.where(remaining > 0, score, np.inf)
+        best = int(np.argmin(score))
+
+        counts[best] += 1
+        remaining[best] -= 1
+        base_count[base_ids[best]] += 1
+        cat_count[cat_ids[best]] += 1
+        diff_count[diff_ids[best]] += 1
+
+    return counts
 
 
 def eval_libero(args: Args) -> None:
@@ -78,9 +175,24 @@ def eval_libero(args: Args) -> None:
     episode_summaries = []
     infer_global_idx = 0  # increments once per client.infer(...), matching step_*.npy numbering
 
+    # Pre-compute how many episodes to run per task. If max_episodes is set, distribute the
+    # episode budget so that base tasks, perturbation categories, and difficulty levels (per
+    # task_classification.json) are all covered as evenly as possible. Otherwise run
+    # num_trials_per_task episodes for every task, as before.
+    if args.max_episodes is not None:
+        task_metadata = _get_task_metadata(task_suite, args.task_suite_name)
+        episode_counts = _select_episode_counts(
+            task_metadata, args.max_episodes, args.num_trials_per_task, args.seed
+        )
+    else:
+        episode_counts = np.full(num_tasks_in_suite, args.num_trials_per_task, dtype=int)
+
     # Start evaluation
     total_episodes, total_successes = 0, 0
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+        if episode_counts[task_id] == 0:
+            continue
+
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -90,9 +202,13 @@ def eval_libero(args: Args) -> None:
         # Initialize LIBERO environment and task description
         env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
 
+        # Compute which episode indices to run for this task
+        n_available = len(initial_states)
+        episode_indices = np.linspace(0, n_available - 1, min(episode_counts[task_id], n_available), dtype=int)
+
         # Start episodes
         task_episodes, task_successes = 0, 0
-        for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
+        for episode_idx in tqdm.tqdm(episode_indices):
             logging.info(f"\nTask: {task_description}")
 
             # Reset environment
@@ -241,4 +357,4 @@ def _quat2axisangle(quat):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    tyro.cli(eval_libero)
+    eval_libero(tyro.cli(Args))

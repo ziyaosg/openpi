@@ -51,6 +51,10 @@ class Args:
     port: int = 8000
     # Record the policy's behavior for debugging.
     record: bool = False
+    # If set, overrides the auto-generated record directory.
+    record_dir: str | None = None
+    # Root directory under which auto-generated record dirs are created (ignored when record_dir is set).
+    record_dir_root: str | None = None
 
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
@@ -103,14 +107,17 @@ def main(args: Args) -> None:
 
     # Record the policy's behavior.
     if args.record:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        match args.policy:
-            case Checkpoint():
-                policy_tag = args.policy.config
-            case Default():
-                policy_tag = args.env.value
-        record_dir = f"/home/zs377/scratch_pi_tkf6/zs377/policy_records_{policy_tag}_{timestamp}"
-        # record_dir = f"/data/ziyao/policy_records_{policy_tag}_{timestamp}"
+        if args.record_dir is not None:
+            record_dir = args.record_dir
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            match args.policy:
+                case Checkpoint():
+                    policy_tag = args.policy.config
+                case Default():
+                    policy_tag = args.env.value
+            root = args.record_dir_root or "/home/zs377/project_pi_tkf6/zs377"
+            record_dir = f"{root}/policy_records_{policy_tag}plus_{timestamp}"
         policy = _policy.PolicyRecorder(policy, record_dir)
 
     hostname = socket.gethostname()

@@ -270,6 +270,7 @@ class Pi0(_model.BaseModel):
         prefix_ar_mask: jnp.ndarray,
         kv_cache,
         noise: jnp.ndarray,
+        prefix_hidden: jnp.ndarray,
     ) -> dict:
         """Compute gradcam, raw_alpha, and attention-weight debug data for one inference step.
 
@@ -569,6 +570,42 @@ class Pi0(_model.BaseModel):
             "v":       v_trimmed,      # [B, L, key_end, K, H_dim]
         }
 
+        # ── Last-layer hidden states ───────────────────────────────────────────
+        # prefix_hidden: [B, T_prefix, D] — output of the final Gemma layer + final
+        # RMSNorm for the PaliGemma expert.  This is the most faithful analog to the
+        # ResNet features used in FAIL-Detect: jointly-trained representations at the
+        # highest level of abstraction, encoding images + language + robot state.
+        mask_f = prefix_mask.astype(prefix_hidden.dtype)                    # [B, T_prefix]
+        denom  = jnp.sum(mask_f, axis=1, keepdims=True) + 1e-8             # [B, 1]
+        hidden_mean = (
+            jnp.sum(prefix_hidden * mask_f[..., None], axis=1) / denom     # [B, D]
+        )
+
+        last_hidden: dict = {
+            "mean":  hidden_mean,           # [B, D] — masked mean over all prefix tokens
+            "image": {},
+            "task":  None,
+            "state": None,
+        }
+
+        # Per-modality pools using the span bookkeeping built above.
+        for cam_name, (s0, s1) in spans["image"].items():
+            last_hidden["image"][cam_name] = jnp.mean(prefix_hidden[:, s0:s1, :], axis=1)  # [B, D]
+
+        if "task" in spans:
+            t0, t1 = spans["task"]
+            span_mask = mask_f[:, t0:t1]
+            span_denom = jnp.sum(span_mask, axis=1, keepdims=True) + 1e-8
+            last_hidden["task"] = (
+                jnp.sum(prefix_hidden[:, t0:t1, :] * span_mask[..., None], axis=1) / span_denom
+            )  # [B, D]
+
+        if "state" in spans:
+            s0, s1 = spans["state"]
+            last_hidden["state"] = jnp.mean(prefix_hidden[:, s0:s1, :], axis=1)  # [B, D]
+
+        debug["last_hidden"] = last_hidden
+
         return debug
 
     @override
@@ -592,7 +629,8 @@ class Pi0(_model.BaseModel):
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        prefix_hidden_list, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
+        # prefix_hidden_list[0]: [B, T_prefix, D] — last-layer hidden states for the PaliGemma expert.
 
         def step(carry):
             x_t, time = carry
@@ -636,6 +674,7 @@ class Pi0(_model.BaseModel):
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
 
         debug = self._compute_debug_info(
-            observation, prefix_tokens, prefix_mask, prefix_ar_mask, kv_cache, noise
+            observation, prefix_tokens, prefix_mask, prefix_ar_mask, kv_cache, noise,
+            prefix_hidden_list[0],
         )
         return x_0, debug
