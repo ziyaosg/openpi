@@ -45,7 +45,6 @@ AUROC_MIN_N = 5
 
 RUN_GROUPS: Dict[str, List[str]] = {
     "pi05_libero10": [
-        "policy_records_pi05_libero_20260511_021509",
         "policy_records_pi05_libero_20260512_182606",
         "policy_records_pi05_libero_20260512_201032",
     ],
@@ -56,6 +55,10 @@ RUN_GROUPS: Dict[str, List[str]] = {
     "pi0fast_liberoplus": [
         "policy_records_pi0_fast_libero_20260516_034939",
         "policy_records_pi0_fast_libero_20260516_034940",
+    ],
+    "pi05_liberoplus": [
+        "policy_records_pi05_liberoplus_20260522_032743",
+        "policy_records_pi05_liberoplus_20260522_031717",
     ],
 }
 

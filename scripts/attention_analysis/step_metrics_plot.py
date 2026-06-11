@@ -44,9 +44,9 @@ from scripts.attention_utils.keys import CAM_NAMES, IMAGE_PATCH_GRID
 # CONFIG
 # ─────────────────────────────────────────────────────────────────────────────
 
-DATA_DIR     = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0_fast_libero_20260516_034939")
+DATA_DIR     = Path("/nfs/roberts/scratch/pi_tkf6/zs377/policy_records_pi0fast_liberoplus_20260516_034940")
 EPISODE_JSON = DATA_DIR / "client_output" / "episode_summaries.json"
-OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0_fast_libero_20260516_034939/analysis")
+OUTPUT_DIR   = Path("/nfs/roberts/scratch/pi_tkf6/zs377/visualization_pi0fast_liberoplus_20260516_034940/analysis")
 
 FILTER_MIXED_TASKS = False   # only tasks with both success and failure episodes
 ACTION_TOKEN = 0            # which action token index to use for gradcam/raw_alpha

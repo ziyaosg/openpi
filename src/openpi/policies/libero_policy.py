@@ -117,4 +117,14 @@ class LiberoOutputs(transforms.DataTransformFn):
         # For your own dataset, replace `7` with the action dimension of your dataset.
         outputs = dict(data)
         outputs.update({"actions": np.asarray(data["actions"][:, :7])})
+
+        # Hoist per-token uncertainty stats from debug to top-level so PolicyRecorder saves them
+        # as outputs/entropy, outputs/au, outputs/eu, outputs/perplexity (helpDetector format).
+        debug = data.get("debug", {})
+        if "entropy" in debug:
+            outputs["entropy"]    = np.asarray(debug["entropy"],    dtype=np.float32)
+            outputs["au"]         = np.asarray(debug["au"],         dtype=np.float32)
+            outputs["eu"]         = np.asarray(debug["eu"],         dtype=np.float32)
+            outputs["perplexity"] = np.asarray(debug["logp"],       dtype=np.float32)
+
         return outputs
